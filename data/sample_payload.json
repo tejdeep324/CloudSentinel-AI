@@ -1,0 +1,29 @@
+{
+  "instance_id": "i-0a1b2c3d4e5f67890",
+  "ami_id": "ami-unhardened-legacy-01",
+  "os": "Ubuntu 20.04 LTS",
+  "network": {
+    "vpc_id": "vpc-migration-01",
+    "subnet_id": "subnet-quarantine-01",
+    "open_ports": [22, 80, 8080, 3389],
+    "public_ip_assigned": true,
+    "security_group_rules": [
+      { "port": 22, "source": "0.0.0.0/0", "protocol": "tcp", "status": "EXPOSED" },
+      { "port": 3389, "source": "0.0.0.0/0", "protocol": "tcp", "status": "EXPOSED" }
+    ]
+  },
+  "storage": {
+    "volume_id": "vol-0987654321",
+    "encrypted": false,
+    "kms_key_id": null
+  },
+  "iam": {
+    "attached_role": "AdminFullAccessRole",
+    "least_privilege_compliant": false
+  },
+  "os_security": {
+    "root_login_enabled": true,
+    "password_auth_enabled": true,
+    "cis_benchmark_compliant": false
+  }
+}
