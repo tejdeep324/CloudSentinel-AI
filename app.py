@@ -1,21 +1,31 @@
 import streamlit as st
 import json
+import pandas as pd
 import plotly.graph_objects as go
+
 from agents.supervisor import SupervisorAgent
+from agents.llm_engine import LLMReasoningEngine
 from core.scoring import calculate_risk_score
 from core.compliance import evaluate_compliance, calculate_cost_optimization, COMPLIANCE_STANDARDS
 from core.pipeline_orchestrator import PipelineOrchestrator
+from core.database_service import AuditDatabaseService
 
 st.set_page_config(page_title="CloudSentinel AI", page_icon="🛡️", layout="wide")
 
-# Initialize Session State
+# Persistent singletons
+db_service = AuditDatabaseService()
+llm_engine = LLMReasoningEngine()
+supervisor = SupervisorAgent()
+orchestrator = PipelineOrchestrator()
+
+# Session State Initialization
 if "scan_started" not in st.session_state:
     st.session_state.scan_started = False
-if "hardened" not in st.session_state:
-    st.session_state.hardened = False
+if "pipeline_result" not in st.session_state:
+    st.session_state.pipeline_result = None
 
 st.title("🛡️ CloudSentinel AI")
-st.caption("Autonomous Workload Security & Zero-Trust AMI Hardening Platform")
+st.caption("Enterprise Autonomous Workload Security & Zero-Trust AMI Hardening Platform")
 st.markdown("---")
 
 # Sidebar Controls
@@ -23,14 +33,21 @@ st.sidebar.header("⚙️ Governance & Settings")
 selected_compliance = st.sidebar.selectbox("Target Compliance Framework:", list(COMPLIANCE_STANDARDS.keys()))
 
 scenario = st.sidebar.selectbox(
-    "Workload Source:",
+    "Workload Telemetry Ingestion:",
     ["Simulated Migration Payload (Default)", "Custom JSON Upload"]
 )
 
+# Robust Payload Ingestion
+payload = None
 if scenario == "Custom JSON Upload":
-    uploaded_file = st.sidebar.file_uploader("Upload Server Telemetry JSON", type=["json"])
+    uploaded_file = st.sidebar.file_uploader("Upload Telemetry JSON", type=["json"])
     if uploaded_file is not None:
-        payload = json.load(uploaded_file)
+        try:
+            payload = json.load(uploaded_file)
+        except Exception:
+            st.sidebar.error("Invalid JSON file uploaded. Loading default payload.")
+            with open("data/sample_payload.json", "r") as f:
+                payload = json.load(f)
     else:
         with open("data/sample_payload.json", "r") as f:
             payload = json.load(f)
@@ -38,20 +55,34 @@ else:
     with open("data/sample_payload.json", "r") as f:
         payload = json.load(f)
 
+st.sidebar.markdown("---")
+st.sidebar.subheader("💰 Resource Cost Optimization")
+cost_data = calculate_cost_optimization("m5.large")
+st.sidebar.metric(
+    label="Projected Monthly Savings", 
+    value=f"${cost_data['monthly_savings']}/mo", 
+    delta=f"-{cost_data['percentage_savings']}% Compute Cost"
+)
+
+st.sidebar.markdown("---")
 simulate_fail = st.sidebar.checkbox("Simulate Hardening Failure (Test Rollback)")
 
-# Initial State: Waiting for user to start scan
+# ----------------- VIEW 1: PRE-INGESTION SCREEN -----------------
 if not st.session_state.scan_started:
-    st.info("👋 System Ready. Inbound server migration detected in Quarantine VPC Subnet.")
+    st.info("Workload detected in isolated Migration Quarantine VPC Subnet. Ready for autonomous assessment.")
     st.json(payload)
     
     if st.button("🚀 Start Ingestion & Autonomous Scan", type="primary"):
         st.session_state.scan_started = True
         st.rerun()
 
-# Step 1: Scan Started -> Show Assessment and Options
+# ----------------- VIEW 2: ACTIVE DASHBOARD -----------------
 else:
-    tab1, tab2 = st.tabs(["🚀 Real-Time Pipeline Interception", "📋 Compliance & Audit Reports"])
+    tab1, tab2, tab3 = st.tabs([
+        "🚀 Real-Time Pipeline Interception", 
+        "📋 Compliance & Cost Analysis",
+        "🗄️ Historical Audit Logs"
+    ])
 
     with tab1:
         col1, col2 = st.columns([1, 1])
@@ -81,19 +112,18 @@ else:
             st.plotly_chart(fig_pre, use_container_width=True)
 
         with col2:
-            st.subheader("🤖 Autonomous Agent Assessment")
-            supervisor = SupervisorAgent()
+            st.subheader("🤖 Autonomous Multi-Agent Assessment")
             assessment = supervisor.coordinate_assessment(payload)
             
             st.error(f"⚠️ **Verdict:** {assessment['supervisor_verdict']} (Confidence: {assessment['confidence_score']})")
-            st.write(f"**Agent Reasoning:** {assessment['reasoning']}")
+            st.write(f"**Supervisor Reasoning:** {assessment['reasoning']}")
             
-            with st.expander("🔍 Detailed Agent Findings"):
+            with st.expander("🔍 Sub-Agent Specific Findings (XAI)"):
                 for report in assessment["agent_reports"]:
                     st.markdown(f"**{report['agent']}** — *Status: {report['status']}*")
                     for item in report["findings"]:
                         st.write(f"• {item}")
-                    st.caption(f"Remediation Action: {report['recommended_action']}")
+                    st.caption(f"Recommended Action: {report['recommended_action']}")
                     st.divider()
 
             st.subheader("⚙️ Select Remediation Strategy")
@@ -103,44 +133,55 @@ else:
             
             c_btn1, c_btn2 = st.columns([2, 1])
             with c_btn1:
-                execute_btn = st.button("🔧 Execute Hardening & Golden AMI Build", type="primary")
+                if st.button("🔧 Execute Hardening & Golden AMI Build", type="primary"):
+                    with st.spinner("Executing zero-trust hardening, generating KMS keys, and building Golden AMI..."):
+                        res = orchestrator.run_full_pipeline(payload, selected_plan, force_failure=simulate_fail)
+                        st.session_state.pipeline_result = res
+                        
+                        # Persist to database
+                        db_service.record_migration_event(
+                            instance_id=payload.get("instance_id", "i-unknown"),
+                            pre_score=res["pre_score"],
+                            post_score=res["post_score"],
+                            compliance=selected_compliance,
+                            status=res["deployment_status"],
+                            manifest=res["hardened_payload"]
+                        )
+                        st.rerun()
+
             with c_btn2:
                 if st.button("🔄 Reset Scan"):
                     st.session_state.scan_started = False
-                    st.session_state.hardened = False
+                    st.session_state.pipeline_result = None
                     st.rerun()
 
-        # Step 2: Hardening Execution
-        if execute_btn:
-            st.session_state.hardened = True
+        # Hardening Results Section (Renders when pipeline_result exists in state)
+        if st.session_state.pipeline_result is not None:
+            res = st.session_state.pipeline_result
             st.markdown("---")
             st.subheader("🔄 Automated Remediation & Verification Scanner")
-            
-            orchestrator = PipelineOrchestrator()
-            with st.spinner("Executing zero-trust hardening, generating KMS keys, and building Golden AMI..."):
-                result = orchestrator.run_full_pipeline(payload, selected_plan, force_failure=simulate_fail)
             
             v_col1, v_col2, v_col3 = st.columns([1, 1, 1])
             
             with v_col1:
-                if result["deployment_status"] == "DEPLOYED_TO_PRODUCTION":
-                    st.success(f"Status: {result['verification']['status']}")
+                if res["deployment_status"] == "DEPLOYED_TO_PRODUCTION":
+                    st.success(f"Status: {res['verification']['status']}")
                 else:
-                    st.error(f"Status: {result['verification']['status']}")
+                    st.error(f"Status: {res['verification']['status']}")
                     
                 st.metric(
                     label="Verified Post-Scan Score", 
-                    value=f"{result['post_score']}/100", 
-                    delta=result['verification']['score_delta']
+                    value=f"{res['post_score']}/100", 
+                    delta=res['verification']['score_delta']
                 )
-                st.write(f"**Hardened AMI ID:** `{result['hardened_payload']['ami_id']}`")
-                st.write(f"**Deployment State:** `{result['deployment_status']}`")
+                st.write(f"**Hardened AMI ID:** `{res['hardened_payload']['ami_id']}`")
+                st.write(f"**Deployment State:** `{res['deployment_status']}`")
 
             with v_col2:
-                gauge_color = "#10B981" if result["post_score"] >= 90 else "#EF4444"
+                gauge_color = "#10B981" if res["post_score"] >= 90 else "#EF4444"
                 fig_post = go.Figure(go.Indicator(
                     mode="gauge+number",
-                    value=result["post_score"],
+                    value=res["post_score"],
                     title={'text': "Post-Hardening Score"},
                     gauge={
                         'axis': {'range': [0, 100]},
@@ -157,10 +198,10 @@ else:
 
             with v_col3:
                 st.subheader("📋 Golden AMI Manifest")
-                st.json(result["hardened_payload"])
+                st.json(res["hardened_payload"])
 
             st.markdown("### 🖥️ Event-Driven Orchestration Console")
-            st.code("\n".join(result["logs"]), language="bash")
+            st.code("\n".join(res["logs"]), language="bash")
 
     with tab2:
         st.subheader(f"📊 Compliance Audit: {selected_compliance}")
@@ -178,3 +219,17 @@ else:
             st.markdown("### 🟢 Post-Hardening Audit Target")
             for p in comp_pre["passed"]:
                 st.success(p)
+                
+        st.markdown("---")
+        st.subheader("💡 Compute Right-Sizing Analysis")
+        st.write(f"Telemetry detected that the instance is provisioned with an idle compute profile (`{cost_data['current_instance']}`).")
+        st.info(f"**Recommendation:** Right-size to `{cost_data['recommended_instance']}` during deployment to save **${cost_data['monthly_savings']}/month** (~{cost_data['percentage_savings']}% cost reduction).")
+
+    with tab3:
+        st.subheader("🗄️ Migration Audit History & Governance Logs")
+        history = db_service.get_historical_logs()
+        if len(history) > 0:
+            df = pd.DataFrame(history)
+            st.dataframe(df, use_container_width=True)
+        else:
+            st.info("No historical events recorded yet. Run a hardening pipeline to populate logs.")
