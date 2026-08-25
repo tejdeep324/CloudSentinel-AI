@@ -1,0 +1,12 @@
+Field,Value
+Platform,CloudSentinel AI
+AMI ID,ami-golden-cis-hardened-v1
+Target Compliance,PCI-DSS (Payment Card Security)
+Pre-Hardening Score,0/100
+Post-Hardening Score,100/100
+Deployment Status,DEPLOYED_TO_PRODUCTION
+Verification Result,VERIFIED_SECURE_GOLDEN_AMI
+
+Port,Source CIDR,Protocol,State
+443,0.0.0.0/0,tcp,SECURE_HTTPS
+22,10.0.0.0/16,tcp,RESTRICTED_INTERNAL_VPC

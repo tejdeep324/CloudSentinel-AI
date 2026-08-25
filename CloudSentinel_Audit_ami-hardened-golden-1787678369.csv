@@ -1,0 +1,12 @@
+CloudSentinel AI - Security & Compliance Migration Audit
+Timestamp,2026-08-25 22:49:29
+Target Framework,PCI-DSS (Payment Card Security)
+AMI ID,ami-hardened-golden-1787678369
+Deployment Status,DEPLOYED_TO_PRODUCTION
+
+Metric,Baseline (Pre-Scan),Verified Target (Post-Scan),Status
+Overall Security Score,0/100,100/100,PASSED
+Storage Encryption,Unencrypted,AWS KMS CMK (AES-256),REMEDIATED
+VPC Ingress (Port 22/3389),Public 0.0.0.0/0,Restricted 10.0.0.0/16,REMEDIATED
+IAM Least Privilege,Wildcard Admin Role,Scoped Migration Profile,REMEDIATED
+OS CIS Hardening,Direct Root / Password Auth,CIS Level 1 Locked,REMEDIATED

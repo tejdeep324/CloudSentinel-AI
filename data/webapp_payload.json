@@ -1,0 +1,29 @@
+{
+  "instance_id": "i-web-frontend-react",
+  "ami_id": "ami-web-node-v18",
+  "os": "Ubuntu 22.04 LTS",
+  "network": {
+    "vpc_id": "vpc-migration-web",
+    "subnet_id": "subnet-dmz-01",
+    "open_ports": [80, 443],
+    "public_ip_assigned": true,
+    "security_group_rules": [
+      { "port": 80, "source": "0.0.0.0/0", "protocol": "tcp", "status": "HTTP_OPEN" },
+      { "port": 443, "source": "0.0.0.0/0", "protocol": "tcp", "status": "HTTPS_SECURE" }
+    ]
+  },
+  "storage": {
+    "volume_id": "vol-web-root-disk",
+    "encrypted": true,
+    "kms_key_id": "arn:aws:kms:us-east-1:111122223333:key/aws-managed-ebs"
+  },
+  "iam": {
+    "attached_role": "S3ReadOnlyWebAssetRole",
+    "least_privilege_compliant": true
+  },
+  "os_security": {
+    "root_login_enabled": false,
+    "password_auth_enabled": true,
+    "cis_benchmark_compliant": false
+  }
+}

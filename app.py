@@ -4,17 +4,17 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from agents.supervisor import SupervisorAgent
-from agents.llm_engine import LLMReasoningEngine
 from core.scoring import calculate_risk_score
-from core.compliance import evaluate_compliance, calculate_cost_optimization, COMPLIANCE_STANDARDS
+from core.compliance import evaluate_compliance, COMPLIANCE_STANDARDS
 from core.pipeline_orchestrator import PipelineOrchestrator
 from core.database_service import AuditDatabaseService
+from core.report_generator import ComplianceReportGenerator
+from tools.cost_calculator_tool import FinOpsCostCalculatorTool
 
 st.set_page_config(page_title="CloudSentinel AI", page_icon="🛡️", layout="wide")
 
 # Persistent singletons
 db_service = AuditDatabaseService()
-llm_engine = LLMReasoningEngine()
 supervisor = SupervisorAgent()
 orchestrator = PipelineOrchestrator()
 
@@ -25,7 +25,7 @@ if "pipeline_result" not in st.session_state:
     st.session_state.pipeline_result = None
 
 st.title("🛡️ CloudSentinel AI")
-st.caption("Enterprise Autonomous Workload Security & Zero-Trust AMI Hardening Platform")
+st.caption("Enterprise Autonomous Multi-Agent Workload Security & Zero-Trust AMI Hardening Platform")
 st.markdown("---")
 
 # Sidebar Controls
@@ -34,30 +34,41 @@ selected_compliance = st.sidebar.selectbox("Target Compliance Framework:", list(
 
 scenario = st.sidebar.selectbox(
     "Workload Telemetry Ingestion:",
-    ["Simulated Migration Payload (Default)", "Custom JSON Upload"]
+    [
+        "Scenario 1: Critical Legacy Server (Default)",
+        "Scenario 2: Unencrypted Production Database",
+        "Scenario 3: Web App (Partially Hardened)",
+        "Scenario 4: Custom JSON Upload"
+    ]
 )
 
-# Robust Payload Ingestion
+# Multi-Scenario Payload Ingestion
 payload = None
-if scenario == "Custom JSON Upload":
+if scenario == "Scenario 4: Custom JSON Upload":
     uploaded_file = st.sidebar.file_uploader("Upload Telemetry JSON", type=["json"])
     if uploaded_file is not None:
         try:
             payload = json.load(uploaded_file)
         except Exception:
-            st.sidebar.error("Invalid JSON file uploaded. Loading default payload.")
+            st.sidebar.error("Invalid JSON file uploaded. Falling back to default.")
             with open("data/sample_payload.json", "r") as f:
                 payload = json.load(f)
     else:
         with open("data/sample_payload.json", "r") as f:
             payload = json.load(f)
+elif scenario == "Scenario 2: Unencrypted Production Database":
+    with open("data/database_payload.json", "r") as f:
+        payload = json.load(f)
+elif scenario == "Scenario 3: Web App (Partially Hardened)":
+    with open("data/webapp_payload.json", "r") as f:
+        payload = json.load(f)
 else:
     with open("data/sample_payload.json", "r") as f:
         payload = json.load(f)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("💰 Resource Cost Optimization")
-cost_data = calculate_cost_optimization("m5.large")
+cost_data = FinOpsCostCalculatorTool.calculate_rightsizing_projection("m5.large")
 st.sidebar.metric(
     label="Projected Monthly Savings", 
     value=f"${cost_data['monthly_savings']}/mo", 
@@ -69,7 +80,7 @@ simulate_fail = st.sidebar.checkbox("Simulate Hardening Failure (Test Rollback)"
 
 # ----------------- VIEW 1: PRE-INGESTION SCREEN -----------------
 if not st.session_state.scan_started:
-    st.info("Workload detected in isolated Migration Quarantine VPC Subnet. Ready for autonomous assessment.")
+    st.info("Workload detected in isolated Migration Quarantine VPC Subnet. Ready for autonomous multi-agent assessment.")
     st.json(payload)
     
     if st.button("🚀 Start Ingestion & Autonomous Scan", type="primary"):
@@ -79,7 +90,7 @@ if not st.session_state.scan_started:
 # ----------------- VIEW 2: ACTIVE DASHBOARD -----------------
 else:
     tab1, tab2, tab3 = st.tabs([
-        "🚀 Real-Time Pipeline Interception", 
+        "🚀 Real-Time Multi-Agent Pipeline", 
         "📋 Compliance & Cost Analysis",
         "🗄️ Historical Audit Logs"
     ])
@@ -88,19 +99,20 @@ else:
         col1, col2 = st.columns([1, 1])
 
         with col1:
-            st.subheader("📥 Inbound Workload Payload (Quarantined)")
+            st.subheader("📥 Quarantined Workload Telemetry")
             st.json(payload)
             
             pre_eval = calculate_risk_score(payload)
             pre_score = pre_eval["total_score"]
             
+            gauge_pre_color = "#EF4444" if pre_score < 70 else "#F59E0B"
             fig_pre = go.Figure(go.Indicator(
                 mode="gauge+number",
                 value=pre_score,
-                title={'text': "Pre-Scan Risk Score (Critical Risk)"},
+                title={'text': "Pre-Scan Risk Score"},
                 gauge={
                     'axis': {'range': [0, 100]},
-                    'bar': {'color': "#EF4444"},
+                    'bar': {'color': gauge_pre_color},
                     'steps': [
                         {'range': [0, 50], 'color': "#FEE2E2"},
                         {'range': [50, 80], 'color': "#FEF3C7"},
@@ -112,24 +124,30 @@ else:
             st.plotly_chart(fig_pre, use_container_width=True)
 
         with col2:
-            st.subheader("🤖 Autonomous Multi-Agent Assessment")
-            assessment = supervisor.coordinate_assessment(payload)
+            st.subheader("🤖 Autonomous Multi-Agent Blackboard")
+            blackboard = supervisor.coordinate_assessment(payload, target_compliance=selected_compliance)
             
-            st.error(f"⚠️ **Verdict:** {assessment['supervisor_verdict']} (Confidence: {assessment['confidence_score']})")
-            st.write(f"**Supervisor Reasoning:** {assessment['reasoning']}")
+            if blackboard.supervisor_verdict == "REMEDIATION_REQUIRED":
+                st.error(f"⚠️ **Supervisor AI Verdict:** {blackboard.supervisor_verdict}")
+            else:
+                st.success(f"✅ **Supervisor AI Verdict:** {blackboard.supervisor_verdict}")
+                
+            st.write(f"**Consensus Reasoning:** {blackboard.supervisor_reasoning}")
             
-            with st.expander("🔍 Sub-Agent Specific Findings (XAI)"):
-                for report in assessment["agent_reports"]:
-                    st.markdown(f"**{report['agent']}** — *Status: {report['status']}*")
-                    for item in report["findings"]:
-                        st.write(f"• {item}")
-                    st.caption(f"Recommended Action: {report['recommended_action']}")
+            with st.expander("🔍 Sub-Agent Specific Findings (XAI Trace)", expanded=True):
+                for f in blackboard.findings:
+                    badge_color = "🔴" if f.severity == "CRITICAL" else ("🟠" if f.severity == "HIGH" else "🟡")
+                    st.markdown(f"{badge_color} **[{f.agent_name}]** `{f.title}` — *Severity: {f.severity}*")
+                    st.write(f"• {f.description}")
+                    st.caption(f"Action: `{f.remediation_action}` | Domain: {f.domain}")
                     st.divider()
 
             st.subheader("⚙️ Select Remediation Strategy")
-            plan_options = list(assessment["remediation_plans"].keys())
+            plan_options = list(blackboard.remediation_plans.keys())
             selected_plan = st.selectbox("Execution Strategy:", plan_options)
-            st.info(f"**Strategy Details:** {assessment['remediation_plans'][selected_plan]['description']}")
+            chosen_plan = blackboard.remediation_plans[selected_plan]
+            
+            st.info(f"**Description:** {chosen_plan.description}\n\n**Trade-off Note:** {chosen_plan.trade_off_notes}")
             
             c_btn1, c_btn2 = st.columns([2, 1])
             with c_btn1:
@@ -138,9 +156,9 @@ else:
                         res = orchestrator.run_full_pipeline(payload, selected_plan, force_failure=simulate_fail)
                         st.session_state.pipeline_result = res
                         
-                        # Persist to database
+                        # Persist to persistent SQLite DB
                         db_service.record_migration_event(
-                            instance_id=payload.get("instance_id", "i-unknown"),
+                            instance_id=payload.get("instance_id", "i-workload-node"),
                             pre_score=res["pre_score"],
                             post_score=res["post_score"],
                             compliance=selected_compliance,
@@ -155,7 +173,7 @@ else:
                     st.session_state.pipeline_result = None
                     st.rerun()
 
-        # Hardening Results Section (Renders when pipeline_result exists in state)
+        # Hardening Results Section
         if st.session_state.pipeline_result is not None:
             res = st.session_state.pipeline_result
             st.markdown("---")
@@ -200,8 +218,34 @@ else:
                 st.subheader("📋 Golden AMI Manifest")
                 st.json(res["hardened_payload"])
 
-            st.markdown("### 🖥️ Event-Driven Orchestration Console")
-            st.code("\n".join(res["logs"]), language="bash")
+            st.markdown("### 🖥️ Real-Time Agent Execution Console")
+            combined_logs = blackboard.execution_trace + ["--- HARDENING EXECUTION ---"] + res["logs"]
+            st.code("\n".join(combined_logs), language="bash")
+
+            # Downloadable Audit Reports
+            st.markdown("### 📥 Compliance Audit Export")
+            exp_col1, exp_col2 = st.columns(2)
+
+            csv_report = ComplianceReportGenerator.generate_csv_summary(res, selected_compliance)
+            json_manifest = ComplianceReportGenerator.generate_json_manifest(res, selected_compliance)
+
+            with exp_col1:
+                st.download_button(
+                    label="📄 Download Security Audit Summary (.CSV)",
+                    data=csv_report,
+                    file_name=f"CloudSentinel_Audit_{res['hardened_payload']['ami_id']}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
+            with exp_col2:
+                st.download_button(
+                    label="📦 Download Full Compliance Manifest (.JSON)",
+                    data=json_manifest,
+                    file_name=f"CloudSentinel_Manifest_{res['hardened_payload']['ami_id']}.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
 
     with tab2:
         st.subheader(f"📊 Compliance Audit: {selected_compliance}")

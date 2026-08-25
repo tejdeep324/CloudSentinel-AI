@@ -1,98 +1,98 @@
-import json
+import os
+import sys
 from typing import Dict, Any
 
-class NetworkAgent:
-    def evaluate(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        issues = []
-        rules = payload.get("network", {}).get("security_group_rules", [])
-        for rule in rules:
-            if rule.get("source") == "0.0.0.0/0" and rule.get("port") in [22, 3389]:
-                issues.append(f"Port {rule.get('port')} is publicly exposed to 0.0.0.0/0 (High Risk).")
-        
-        return {
-            "agent": "Network Agent",
-            "status": "Vulnerable" if issues else "Compliant",
-            "findings": issues,
-            "recommended_action": "Revoke 0.0.0.0/0 ingress and restrict SSH/RDP access to VPN/Bastion IP CIDR."
-        }
+# Ensure project root is available in path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-class SecurityAgent:
-    def evaluate(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        issues = []
-        storage = payload.get("storage", {})
-        os_sec = payload.get("os_security", {})
-        
-        if not storage.get("encrypted", False):
-            issues.append("Underlying EBS volume is unencrypted. Violates CIS AWS Foundations Benchmark.")
-        if os_sec.get("root_login_enabled", False):
-            issues.append("Direct SSH Root Login is permitted in /etc/ssh/sshd_config.")
-        if os_sec.get("password_auth_enabled", False):
-            issues.append("Password-based authentication is enabled instead of mandatory SSH Key Pairs.")
-            
-        return {
-            "agent": "Security & AMI Hardening Agent",
-            "status": "Vulnerable" if issues else "Compliant",
-            "findings": issues,
-            "recommended_action": "Enforce KMS Customer Managed Key (CMK) encryption, disable SSH root login, and enforce ed25519 key-based auth."
-        }
+from agents.base_agent import BaseAgent
+from agents.state import AgentBlackboard, RemediationPlan
+from agents.specialized_agents import SecurityAgent, NetworkAgent, IAMAgent, ComplianceAgent
+from core.scoring import calculate_risk_score
 
-class IAMAgent:
-    def evaluate(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        issues = []
-        iam = payload.get("iam", {})
-        if not iam.get("least_privilege_compliant", True):
-            issues.append(f"Role '{iam.get('attached_role')}' contains wildcard administrative permissions ('*:*').")
-            
-        return {
-            "agent": "IAM Governance Agent",
-            "status": "Vulnerable" if issues else "Compliant",
-            "findings": issues,
-            "recommended_action": "Detach AdministratorAccess and attach an ephemeral least-privilege role using AWS STS AssumeRole."
-        }
+class SupervisorAgent(BaseAgent):
+    """Lead orchestrator: coordinates sub-agents, aggregates state, and formulates remediation plans."""
 
-class SupervisorAgent:
     def __init__(self):
-        self.net_agent = NetworkAgent()
-        self.sec_agent = SecurityAgent()
-        self.iam_agent = IAMAgent()
-
-    def coordinate_assessment(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        net_report = self.net_agent.evaluate(payload)
-        sec_report = self.sec_agent.evaluate(payload)
-        iam_report = self.iam_agent.evaluate(payload)
-
-        # Multi-Plan Remediation Generation
-        plans = {
-            "Plan A (Maximum Security - Recommended)": {
-                "description": "Full zero-trust lockdown: KMS CMK encryption, quarantine isolated VPC, strict security groups, CIS benchmark OS hardening, and IAM least-privilege attachment.",
-                "estimated_time": "3-5 mins",
-                "target_score": 95,
-                "cost_impact": "Negligible (Free Tier Eligible)"
-            },
-            "Plan B (Fast Deployment)": {
-                "description": "Rapid patching: Ingest instance, close public ingress ports 22/3389, and attach default AWS-managed KMS encryption without deep OS recompilation.",
-                "estimated_time": "1-2 mins",
-                "target_score": 80,
-                "cost_impact": "Zero"
-            },
-            "Plan C (Cost & Downtime Optimized)": {
-                "description": "Live in-place patching with instance right-sizing recommendation to t3.micro and scheduled off-peak volume re-encryption.",
-                "estimated_time": "4 mins",
-                "target_score": 85,
-                "cost_impact": "Saves ~15% monthly compute costs"
-            }
-        }
-
-        reasoning = (
-            f"Supervisor evaluated telemetry for Instance '{payload.get('instance_id')}'. "
-            f"Detected {len(net_report['findings']) + len(sec_report['findings']) + len(iam_report['findings'])} critical security flaws. "
-            f"The image requires immediate quarantine and automated Golden AMI baking."
+        super().__init__(
+            name="SupervisorAgent",
+            domain="Multi-Agent Orchestration & Consensus",
+            system_prompt=(
+                "You are the Supervisor AI for CloudSentinel AI. Coordinate domain agents, "
+                "synthesize security posture verdicts, and formulate trade-off remediation plans."
+            )
         )
+        self.sub_agents = [
+            SecurityAgent(),
+            NetworkAgent(),
+            IAMAgent(),
+            ComplianceAgent()
+        ]
 
-        return {
-            "supervisor_verdict": "REMEDIATION_REQUIRED",
-            "confidence_score": "98.4%",
-            "reasoning": reasoning,
-            "agent_reports": [net_report, sec_report, iam_report],
-            "remediation_plans": plans
+    def coordinate_assessment(self, workload_payload: Dict[str, Any], target_compliance: str = "PCI-DSS (Payment Card Security)") -> AgentBlackboard:
+        """Executes full collaborative multi-agent evaluation pipeline."""
+        blackboard = AgentBlackboard(
+            workload_payload=workload_payload,
+            target_compliance=target_compliance
+        )
+        
+        blackboard.log_trace(self.name, "Initialized multi-agent quarantine evaluation pipeline.")
+
+        # 1. Calculate Baseline Pre-Scan Quantitative Score
+        pre_eval = calculate_risk_score(workload_payload)
+        blackboard.pre_scan_score = pre_eval["total_score"]
+        blackboard.log_trace(self.name, f"Pre-Scan Baseline Risk Score calculated: {blackboard.pre_scan_score}/100")
+
+        # 2. Sequentially Dispatch Sub-Agents (Collaborative Reasoning)
+        for agent in self.sub_agents:
+            agent.evaluate(blackboard)
+
+        # 3. Consensus & Decision Engine
+        critical_count = sum(1 for f in blackboard.findings if f.severity == "CRITICAL")
+        high_count = sum(1 for f in blackboard.findings if f.severity == "HIGH")
+
+        if critical_count > 0 or high_count > 0:
+            blackboard.supervisor_verdict = "REMEDIATION_REQUIRED"
+            blackboard.supervisor_reasoning = (
+                f"Consensus reached: Quarantine release blocked due to {critical_count} critical "
+                f"and {high_count} high-severity findings across storage, network, and IAM domains."
+            )
+        else:
+            blackboard.supervisor_verdict = "APPROVED_FOR_MIGRATION"
+            blackboard.supervisor_reasoning = (
+                "Consensus reached: All domain security, network, and compliance parameters satisfy baseline policy."
+            )
+
+        # 4. Formulate Trade-Off Remediation Strategies
+        blackboard.remediation_plans = {
+            "Plan A (Maximum Security - Recommended)": RemediationPlan(
+                plan_id="PLAN_A",
+                name="Maximum Security & Zero-Trust",
+                description="Complete remediation: Customer KMS CMK encryption, 0.0.0.0/0 ingress revocation, CIS Level 1 OS scripts, and least-privilege IAM binding.",
+                target_risk_score=95,
+                actions=["ENABLE_KMS_CMK_ENCRYPTION", "LOCK_SECURITY_GROUP_INGRESS", "APPLY_CIS_LEVEL1_OS_HARDENING", "REPLACE_WITH_LEAST_PRIVILEGE_ROLE"],
+                trade_off_notes="Takes ~2 minutes to bake a fresh Golden AMI, but delivers 100% Zero-Trust posture.",
+                estimated_duration="2 mins (Golden AMI Bake)"
+            ),
+            "Plan B (Fast Network Quarantine Lockdown)": RemediationPlan(
+                plan_id="PLAN_B",
+                name="Fast Network Quarantine Lockdown",
+                description="Revokes public ingress rules without re-encrypting underlying EBS volumes.",
+                target_risk_score=75,
+                actions=["LOCK_SECURITY_GROUP_INGRESS"],
+                trade_off_notes="Instant (<30s), but leaves unencrypted data at risk at the storage layer.",
+                estimated_duration="< 30 seconds"
+            ),
+            "Plan C (Regulatory Baseline Hardening)": RemediationPlan(
+                plan_id="PLAN_C",
+                name="CIS & KMS Compliance Baseline",
+                description="Enforces KMS storage encryption and CIS SSH hardening for compliance audits.",
+                target_risk_score=85,
+                actions=["ENABLE_KMS_CMK_ENCRYPTION", "APPLY_CIS_LEVEL1_OS_HARDENING"],
+                trade_off_notes="Satisfies regulatory compliance checks while leaving existing security groups intact.",
+                estimated_duration="1.5 mins"
+            )
         }
+
+        blackboard.log_trace(self.name, f"Assessment finalized with verdict: {blackboard.supervisor_verdict}")
+        return blackboard

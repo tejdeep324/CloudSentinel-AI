@@ -1,41 +1,61 @@
 import copy
-from typing import Dict, Any
+import time
+from typing import Dict, Any, List, Optional
 
 class HardeningEngine:
+    """Executes automated remediation to bake a Zero-Trust Golden AMI."""
+
     @staticmethod
-    def execute_remediation(payload: Dict[str, Any], plan_selected: str) -> Dict[str, Any]:
-        hardened_payload = copy.deepcopy(payload)
+    def remediate_workload(payload: Dict[str, Any], plan_name: str) -> Dict[str, Any]:
+        hardened = copy.deepcopy(payload) if isinstance(payload, dict) else {}
+        hardened["ami_id"] = f"ami-hardened-golden-{int(time.time())}"
         
-        # 1. Network Hardening (VPC & Security Groups)
-        hardened_payload["network"]["security_group_rules"] = [
-            {"port": 443, "source": "0.0.0.0/0", "protocol": "tcp", "status": "SECURE_HTTPS"},
-            {"port": 22, "source": "10.0.0.0/16", "protocol": "tcp", "status": "RESTRICTED_INTERNAL_VPC"}
-        ]
-        hardened_payload["network"]["open_ports"] = [443, 22]
+        # 1. Enforce KMS CMK Storage Encryption
+        if "storage" not in hardened or not isinstance(hardened["storage"], dict):
+            hardened["storage"] = {}
+        hardened["storage"]["encrypted"] = True
+        hardened["storage"]["kms_key_id"] = "arn:aws:kms:us-east-1:111122223333:key/cloudsentinel-cmk-01"
+
+        # 2. Lock Down Network Security Group Ingress
+        if "network" not in hardened or not isinstance(hardened["network"], dict):
+            hardened["network"] = {}
+        hardened["network"]["public_ip_assigned"] = False
         
-        # 2. Storage Hardening (AWS KMS Encryption & Golden AMI)
-        hardened_payload["storage"]["encrypted"] = True
-        hardened_payload["storage"]["kms_key_id"] = "arn:aws:kms:us-east-1:123456789012:key/cmk-golden-ami-01"
-        hardened_payload["ami_id"] = "ami-golden-cis-hardened-v1"
+        safe_rules = []
+        for rule in hardened["network"].get("security_group_rules", []):
+            if isinstance(rule, dict):
+                r = copy.deepcopy(rule)
+                if r.get("port") in [22, 3389, 3306, 5432, 27017]:
+                    r["source"] = "10.0.0.0/16"
+                    r["status"] = "RESTRICTED_TO_VPC"
+                safe_rules.append(r)
+        hardened["network"]["security_group_rules"] = safe_rules
 
-        # 3. IAM Least-Privilege Role Attachment
-        hardened_payload["iam"]["attached_role"] = "CloudSentinelLeastPrivilegeExecutionRole"
-        hardened_payload["iam"]["least_privilege_compliant"] = True
+        # 3. Apply Principle of Least Privilege to IAM Profile
+        if "iam" not in hardened or not isinstance(hardened["iam"], dict):
+            hardened["iam"] = {}
+        hardened["iam"]["attached_role"] = "CloudSentinelScopedMigrationRole"
+        hardened["iam"]["least_privilege_compliant"] = True
 
-        # 4. OS Hardening (CIS Benchmark)
-        hardened_payload["os_security"]["root_login_enabled"] = False
-        hardened_payload["os_security"]["password_auth_enabled"] = False
-        hardened_payload["os_security"]["cis_benchmark_compliant"] = True
+        # 4. OS CIS Level 1 Hardening
+        if "os_security" not in hardened or not isinstance(hardened["os_security"], dict):
+            hardened["os_security"] = {}
+        hardened["os_security"]["root_login_enabled"] = False
+        hardened["os_security"]["password_auth_enabled"] = False
+        hardened["os_security"]["cis_benchmark_compliant"] = True
 
-        return hardened_payload
+        return hardened
+
 
 class VerificationScanner:
+    """Performs closed-loop post-hardening verification scanning."""
+
     @staticmethod
-    def verify(pre_score: int, post_score: int) -> Dict[str, Any]:
-        passed = post_score >= 90
+    def verify(pre_score: int, post_score: int, threshold: int = 90) -> Dict[str, Any]:
+        passed = bool(post_score >= threshold)
         return {
             "verification_passed": passed,
-            "status": "VERIFIED_SECURE_GOLDEN_AMI" if passed else "VERIFICATION_FAILED_TRIGGER_ROLLBACK",
-            "score_delta": f"+{post_score - pre_score} points improvement",
-            "production_ready": passed
+            "status": "PASSED (Security Posture Verified)" if passed else "FAILED (Threshold Not Met)",
+            "score_delta": f"+{post_score - pre_score} pts",
+            "threshold_required": threshold
         }
