@@ -1,0 +1,28 @@
+{
+  "instance_id": "i-test-partially-hardened-node",
+  "instance_type": "t3.medium",
+  "storage": {
+    "volume_id": "vol-test-02",
+    "encrypted": true,
+    "kms_key_id": "arn:aws:kms:us-east-1:111122223333:key/cmk-custom-01"
+  },
+  "network": {
+    "public_ip_assigned": true,
+    "security_group_rules": [
+      {
+        "port": 22,
+        "protocol": "tcp",
+        "source": "0.0.0.0/0"
+      }
+    ]
+  },
+  "iam": {
+    "attached_role": "CloudSentinelScopedMigrationRole",
+    "least_privilege_compliant": true
+  },
+  "os_security": {
+    "root_login_enabled": false,
+    "password_auth_enabled": false,
+    "cis_benchmark_compliant": true
+  }
+}

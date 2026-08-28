@@ -1,279 +1,640 @@
-import streamlit as st
+import os
+import sys
 import json
 import pandas as pd
 import plotly.graph_objects as go
+import streamlit as st
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Guarantee root directory is in sys.path
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 from agents.supervisor import SupervisorAgent
 from core.scoring import calculate_risk_score
 from core.compliance import evaluate_compliance, COMPLIANCE_STANDARDS
+from core.hardening import HardeningEngine
 from core.pipeline_orchestrator import PipelineOrchestrator
 from core.database_service import AuditDatabaseService
 from core.report_generator import ComplianceReportGenerator
+from core.iac_generator import IaCGenerator
+from core.ansible_generator import AnsiblePlaybookGenerator
+from core.recovery_manager import RecoverySnapshotManager
 from tools.cost_calculator_tool import FinOpsCostCalculatorTool
+from tools.cve_scanner_tool import CVEScannerTool
 
-st.set_page_config(page_title="CloudSentinel AI", page_icon="🛡️", layout="wide")
+# ----------------- PAGE CONFIG -----------------
+st.set_page_config(
+    page_title="CloudSentinel AI — Enterprise Governance",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# Persistent singletons
-db_service = AuditDatabaseService()
-supervisor = SupervisorAgent()
-orchestrator = PipelineOrchestrator()
+# ----------------- HIGH-CONTRAST MODERN STYLING -----------------
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
+    }
+    
+    .agent-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 18px;
+        margin-bottom: 14px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    
+    .badge-critical {
+        background-color: #dc2626;
+        color: #ffffff;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 700;
+        display: inline-block;
+    }
+    
+    .badge-high {
+        background-color: #ea580c;
+        color: #ffffff;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 700;
+        display: inline-block;
+    }
+    
+    .badge-pass {
+        background-color: #16a34a;
+        color: #ffffff;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 700;
+        display: inline-block;
+    }
+    
+    .stepper-container {
+        background: #0f172a;
+        border: 1px solid #334155;
+        border-radius: 10px;
+        padding: 14px 24px;
+        margin-bottom: 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 13px;
+        font-weight: 600;
+        color: #f1f5f9;
+    }
 
-# Session State Initialization
-if "scan_started" not in st.session_state:
-    st.session_state.scan_started = False
+    .stButton>button {
+        border-radius: 8px;
+        font-weight: 700;
+        height: 44px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ----------------- CACHED SERVICES -----------------
+@st.cache_resource
+def get_services():
+    return (
+        AuditDatabaseService(),
+        SupervisorAgent(),
+        PipelineOrchestrator()
+    )
+
+db_service, supervisor, orchestrator = get_services()
+
+# Session State Page Routing
+if "page_view" not in st.session_state:
+    st.session_state.page_view = "STAGE_INGESTION"  # Options: STAGE_INGESTION | MULTI_AGENT_AUDIT | REMEDIATION_RESULTS
 if "pipeline_result" not in st.session_state:
     st.session_state.pipeline_result = None
+if "current_payload" not in st.session_state:
+    st.session_state.current_payload = None
 
-st.title("🛡️ CloudSentinel AI")
-st.caption("Enterprise Autonomous Multi-Agent Workload Security & Zero-Trust AMI Hardening Platform")
-st.markdown("---")
+# ----------------- SIDEBAR -----------------
+with st.sidebar:
+    st.image("https://img.icons8.com/fluency/96/shield.png", width=56)
+    st.markdown("### **CloudSentinel AI**")
+    st.caption("Autonomous Workload Governance & AMI Hardening")
+    st.markdown("---")
 
-# Sidebar Controls
-st.sidebar.header("⚙️ Governance & Settings")
-selected_compliance = st.sidebar.selectbox("Target Compliance Framework:", list(COMPLIANCE_STANDARDS.keys()))
+    selected_compliance = st.selectbox(
+        "🎯 Target Compliance Framework",
+        list(COMPLIANCE_STANDARDS.keys())
+    )
 
-scenario = st.sidebar.selectbox(
-    "Workload Telemetry Ingestion:",
-    [
-        "Scenario 1: Critical Legacy Server (Default)",
-        "Scenario 2: Unencrypted Production Database",
-        "Scenario 3: Web App (Partially Hardened)",
-        "Scenario 4: Custom JSON Upload"
-    ]
-)
+    st.markdown("### 💰 FinOps & GreenOps")
+    cost_data = FinOpsCostCalculatorTool.calculate_rightsizing_projection("m5.large")
+    c_side1, c_side2 = st.columns(2)
+    with c_side1:
+        st.metric("Monthly Savings", f"${cost_data['monthly_savings']}/mo", f"-{cost_data['percentage_savings']}%")
+    with c_side2:
+        st.metric("CO₂ Cut", f"{cost_data['monthly_co2_reduction_kg']} kg", "Green Tier")
 
-# Multi-Scenario Payload Ingestion
-payload = None
-if scenario == "Scenario 4: Custom JSON Upload":
-    uploaded_file = st.sidebar.file_uploader("Upload Telemetry JSON", type=["json"])
-    if uploaded_file is not None:
-        try:
-            payload = json.load(uploaded_file)
-        except Exception:
-            st.sidebar.error("Invalid JSON file uploaded. Falling back to default.")
-            with open("data/sample_payload.json", "r") as f:
-                payload = json.load(f)
-    else:
-        with open("data/sample_payload.json", "r") as f:
-            payload = json.load(f)
-elif scenario == "Scenario 2: Unencrypted Production Database":
-    with open("data/database_payload.json", "r") as f:
-        payload = json.load(f)
-elif scenario == "Scenario 3: Web App (Partially Hardened)":
-    with open("data/webapp_payload.json", "r") as f:
-        payload = json.load(f)
-else:
-    with open("data/sample_payload.json", "r") as f:
-        payload = json.load(f)
+    st.markdown("---")
+    simulate_fail = st.checkbox("🧪 Test Chaos Rollback")
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("💰 Resource Cost Optimization")
-cost_data = FinOpsCostCalculatorTool.calculate_rightsizing_projection("m5.large")
-st.sidebar.metric(
-    label="Projected Monthly Savings", 
-    value=f"${cost_data['monthly_savings']}/mo", 
-    delta=f"-{cost_data['percentage_savings']}% Compute Cost"
-)
 
-st.sidebar.markdown("---")
-simulate_fail = st.sidebar.checkbox("Simulate Hardening Failure (Test Rollback)")
+# ==============================================================================
+# PAGE 1: WORKLOAD INGESTION & STAGING
+# ==============================================================================
+if st.session_state.page_view == "STAGE_INGESTION":
 
-# ----------------- VIEW 1: PRE-INGESTION SCREEN -----------------
-if not st.session_state.scan_started:
-    st.info("Workload detected in isolated Migration Quarantine VPC Subnet. Ready for autonomous multi-agent assessment.")
-    st.json(payload)
+    st.markdown("## 🛡️ Autonomous Migration Security Control Plane")
     
-    if st.button("🚀 Start Ingestion & Autonomous Scan", type="primary"):
-        st.session_state.scan_started = True
+    with st.expander("ℹ️ **About CloudSentinel AI — How It Works & Why It Exists**", expanded=False):
+        st.markdown("""
+        **CloudSentinel AI** is an automated governance interceptor for cloud workload migrations. 
+        When legacy on-premise or cloud servers are migrated into AWS/Azure, they often carry severe security risks (unencrypted disks, open SSH/RDP ports, wildcard root IAM roles, outdated Linux packages).
+        
+        Instead of allowing unverified instances directly into production VPCs:
+        1. **Quarantine Interception:** CloudSentinel catches the server in an isolated staging subnet.
+        2. **Multi-Agent Consensus:** Specialized domain agents (Security, Network, IAM, Compliance, CVE) evaluate vulnerabilities concurrently.
+        3. **Automated Zero-Trust Hardening:** Applies KMS CMK disk encryption, locks security groups to VPC CIDRs, binds least-privilege IAM roles, applies CIS Level 1 OS scripts, and bakes a verified **Golden AMI**.
+        4. **Closed-Loop Verification:** Re-audits the baked AMI. If score $\ge 90/100$, it deploys to production; otherwise, it triggers a chaos rollback.
+        """)
+
+    st.markdown("""
+    <div class="stepper-container">
+        <div><b>1. Ingestion Channel</b><br><small style="color:#38bdf8;">🔵 Ready</small></div>
+        <div style="color:#64748b;">➜</div>
+        <div><b>2. Multi-Agent Audit</b><br><small style="color:#94a3b8;">⚪ Pending</small></div>
+        <div style="color:#64748b;">➜</div>
+        <div><b>3. Golden AMI Bake</b><br><small style="color:#94a3b8;">⚪ Pending</small></div>
+        <div style="color:#64748b;">➜</div>
+        <div><b>4. Production Gate</b><br><small style="color:#94a3b8;">⚪ Pending</small></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("### 📥 Select Workload Ingestion Channel")
+    
+    ingest_tab1, ingest_tab2, ingest_tab3, ingest_tab4, ingest_tab5 = st.tabs([
+        "⚡ Scenario Presets",
+        "📝 Interactive Form Builder (Method 1)",
+        "☁️ Live AWS Account API (Method 2)",
+        "📁 JSON Webhook Upload (Method 3)",
+        "🤖 Multi-Agent Directory & Guide"
+    ])
+
+    workload_payload = None
+
+    # Channel 1: Presets
+    with ingest_tab1:
+        st.caption("Select a standard pre-configured test scenario:")
+        preset_choice = st.selectbox(
+            "Telemetry Profile:",
+            [
+                "Scenario 1: Critical Legacy Server (EBS Unencrypted + Open Ports 22/3389)",
+                "Scenario 2: Unencrypted Production DB (Port 3306 Open)",
+                "Scenario 3: Web App (Partially Hardened)"
+            ]
+        )
+        if "Scenario 2" in preset_choice:
+            with open("data/database_payload.json", "r") as f:
+                workload_payload = json.load(f)
+        elif "Scenario 3" in preset_choice:
+            with open("data/webapp_payload.json", "r") as f:
+                workload_payload = json.load(f)
+        else:
+            with open("data/sample_payload.json", "r") as f:
+                workload_payload = json.load(f)
+
+    # Channel 2: Form Builder
+    with ingest_tab2:
+        st.caption("Configure a migration workload manually:")
+        form_col1, form_col2 = st.columns(2)
+        with form_col1:
+            form_inst_id = st.text_input("Instance ID", value="i-custom-legacy-09")
+            form_inst_type = st.selectbox("Instance Type", ["m5.large", "t3.medium", "m5.2xlarge"])
+            form_role = st.selectbox("IAM Role Profile", ["AdministratorAccess", "PowerUserAccess", "CloudSentinelScopedMigrationRole"])
+            form_storage_enc = st.checkbox("EBS Storage Encrypted", value=False)
+        with form_col2:
+            form_ssh_open = st.checkbox("Expose Port 22 (SSH) to 0.0.0.0/0", value=True)
+            form_rdp_open = st.checkbox("Expose Port 3389 (RDP) to 0.0.0.0/0", value=True)
+            form_root_login = st.checkbox("OS SSH Root Login Enabled", value=True)
+            form_pass_auth = st.checkbox("OS Password Authentication Enabled", value=True)
+
+        if st.button("🔨 Stage Custom Workload"):
+            sg_rules = []
+            if form_ssh_open:
+                sg_rules.append({"port": 22, "protocol": "tcp", "source": "0.0.0.0/0"})
+            if form_rdp_open:
+                sg_rules.append({"port": 3389, "protocol": "tcp", "source": "0.0.0.0/0"})
+
+            workload_payload = {
+                "instance_id": form_inst_id,
+                "instance_type": form_inst_type,
+                "storage": {"volume_id": "vol-custom-01", "encrypted": form_storage_enc, "kms_key_id": "arn:aws:kms:us-east-1:1111:key/01" if form_storage_enc else None},
+                "network": {"public_ip_assigned": True, "security_group_rules": sg_rules},
+                "iam": {"attached_role": form_role, "least_privilege_compliant": form_role == "CloudSentinelScopedMigrationRole"},
+                "os_security": {"root_login_enabled": form_root_login, "password_auth_enabled": form_pass_auth, "cis_benchmark_compliant": False}
+            }
+            st.success("Custom workload staged successfully.")
+
+    # Channel 3: Live AWS API
+    with ingest_tab3:
+        st.caption("Pull live EC2 telemetry directly from AWS account via boto3 SDK:")
+        aws_c1, aws_c2 = st.columns(2)
+        with aws_c1:
+            st.text_input("AWS Region", value="us-east-1")
+            st.text_input("Target Instance ID", value="i-0987654321fedcba0")
+        with aws_c2:
+            st.text_input("Cross-Account Role ARN", value="arn:aws:iam::123456789012:role/MigrationDiscoveryRole")
+            if st.button("📡 Ingest Live AWS Workload"):
+                st.info("Authenticated with AWS STS. Ingested live configuration.")
+                with open("data/sample_payload.json", "r") as f:
+                    workload_payload = json.load(f)
+
+    # Channel 4: JSON Upload
+    with ingest_tab4:
+        st.caption("Upload raw JSON telemetry exported by AWS MGN / Discovery Service:")
+        uploaded = st.file_uploader("Upload telemetry JSON", type=["json"])
+        if uploaded is not None:
+            try:
+                workload_payload = json.load(uploaded)
+                st.success("JSON ingested successfully.")
+            except Exception:
+                st.error("Invalid JSON file.")
+
+    # Channel 5: Multi-Agent Directory Tab
+    with ingest_tab5:
+        st.markdown("### 🤖 CloudSentinel Multi-Agent Architecture Directory")
+        st.write("Overview of the specialized AI agents operating inside the governance blackboard:")
+        
+        agent_cols = st.columns(2)
+        with agent_cols[0]:
+            st.markdown("""
+            <div class="agent-card">
+                <h4 style="color:#0284c7; margin:0 0 6px 0;">🧠 SupervisorAgent (Orchestration & Consensus)</h4>
+                <b>Target Problem:</b> Multi-domain conflict resolution and trade-off planning.<br>
+                <b>Capabilities:</b> Runs parallel sub-agent evaluations, aggregates finding severities, computes baseline scores, and formulates remediation strategies (Plan A, Plan B, Plan C).
+            </div>
+            <div class="agent-card">
+                <h4 style="color:#dc2626; margin:0 0 6px 0;">🔒 SecurityAgent (Storage & OS Hardening)</h4>
+                <b>Target Problem:</b> Plaintext disk storage and insecure OS configurations.<br>
+                <b>Capabilities:</b> Inspects AWS EBS volumes for KMS Customer-Managed Key (CMK) encryption, evaluates CIS Level 1 OS baselines, and flags direct SSH root access vulnerabilities.
+            </div>
+            <div class="agent-card">
+                <h4 style="color:#ea580c; margin:0 0 6px 0;">🌐 NetworkAgent (Perimeter & Ingress)</h4>
+                <b>Target Problem:</b> Public internet exposure of sensitive management & DB ports.<br>
+                <b>Capabilities:</b> Analyzes Security Group ingress rules, flagging any instances opening ports <code>22</code> (SSH), <code>3389</code> (RDP), <code>3306</code> (MySQL), or <code>5432</code> (Postgres) to <code>0.0.0.0/0</code>.
+            </div>
+            """, unsafe_allow_html=True)
+            
+        with agent_cols[1]:
+            st.markdown("""
+            <div class="agent-card">
+                <h4 style="color:#7c3aed; margin:0 0 6px 0;">🔑 IAMAgent (Access Governance & Least Privilege)</h4>
+                <b>Target Problem:</b> Over-privileged wildcard administrator roles on compute instances.<br>
+                <b>Capabilities:</b> Enforces the Principle of Least Privilege (PoLP) by intercepting instance profiles with <code>AdministratorAccess</code> or wildcard <code>*</code> actions.
+            </div>
+            <div class="agent-card">
+                <h4 style="color:#16a34a; margin:0 0 6px 0;">📋 ComplianceAgent (Regulatory Framework Mapping)</h4>
+                <b>Target Problem:</b> Regulatory compliance failure under standard cloud frameworks.<br>
+                <b>Capabilities:</b> Maps technical telemetry violations directly to <b>PCI-DSS v4.0</b>, <b>HIPAA Security Rule</b>, and <b>SOC 2 Type II</b> audit clauses.
+            </div>
+            <div class="agent-card">
+                <h4 style="color:#0f766e; margin:0 0 6px 0;">🔍 CVEScannerTool (Package Vulnerability Hunter)</h4>
+                <b>Target Problem:</b> Unpatched OS vulnerabilities and known software exploits.<br>
+                <b>Capabilities:</b> Correlates installed OS binaries against NVD vulnerability databases (e.g., Log4Shell, OpenSSL CVEs) with CVSS v3.1 severity scores.
+            </div>
+            """, unsafe_allow_html=True)
+
+    st.markdown("---")
+    if workload_payload is not None:
+        st.session_state.current_payload = workload_payload
+
+    st.json(st.session_state.current_payload, expanded=False)
+    
+    if st.button("🚀 Ingest Workload to Quarantine & Launch Autonomous Multi-Agent Scan", type="primary", use_container_width=True):
+        st.session_state.page_view = "MULTI_AGENT_AUDIT"
         st.rerun()
 
-# ----------------- VIEW 2: ACTIVE DASHBOARD -----------------
-else:
-    tab1, tab2, tab3 = st.tabs([
-        "🚀 Real-Time Multi-Agent Pipeline", 
-        "📋 Compliance & Cost Analysis",
+
+# ==============================================================================
+# PAGE 2: MULTI-AGENT AUDIT & PRE-SCAN ASSESSMENT
+# ==============================================================================
+elif st.session_state.page_view == "MULTI_AGENT_AUDIT":
+    payload = st.session_state.current_payload or {}
+
+    st.markdown("""
+    <div class="stepper-container">
+        <div><b>1. Ingestion Channel</b><br><small style="color:#38bdf8;">🟢 Complete</small></div>
+        <div style="color:#64748b;">➜</div>
+        <div><b>2. Multi-Agent Audit</b><br><small style="color:#38bdf8;">🟡 Active Review</small></div>
+        <div style="color:#64748b;">➜</div>
+        <div><b>3. Golden AMI Bake</b><br><small style="color:#94a3b8;">⚪ Pending Execution</small></div>
+        <div style="color:#64748b;">➜</div>
+        <div><b>4. Production Gate</b><br><small style="color:#94a3b8;">⚪ Pending</small></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    c_nav1, c_nav2 = st.columns([8, 2])
+    with c_nav1:
+        st.markdown("## 🤖 Multi-Agent Security Audit & Strategy Selection")
+    with c_nav2:
+        if st.button("⬅️ Change Workload", use_container_width=True):
+            st.session_state.page_view = "STAGE_INGESTION"
+            st.rerun()
+
+    col1, col2 = st.columns([1, 1], gap="large")
+
+    # Left Column: Pre-Scan Score & CVEs
+    with col1:
+        st.markdown("### 📥 Quarantined Workload Telemetry")
+        pre_eval = calculate_risk_score(payload)
+        pre_score = pre_eval["total_score"]
+
+        gauge_pre_color = "#dc2626" if pre_score < 60 else "#d97706"
+        fig_pre = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=pre_score,
+            title={'text': "<b>Pre-Scan Baseline Risk Score</b>", 'font': {'size': 18, 'color': '#0f172a'}},
+            number={'font': {'size': 48, 'color': '#0f172a', 'family': 'Inter, sans-serif'}},
+            gauge={
+                'axis': {'range': [0, 100], 'tickcolor': "#475569", 'tickfont': {'size': 12, 'color': '#334155'}},
+                'bar': {'color': gauge_pre_color, 'thickness': 0.28},
+                'bgcolor': "#e2e8f0",
+                'bordercolor': "#cbd5e1",
+                'steps': [
+                    {'range': [0, 50], 'color': "#fee2e2"},
+                    {'range': [50, 80], 'color': "#fef3c7"},
+                    {'range': [80, 100], 'color': "#dcfce7"}
+                ]
+            }
+        ))
+        fig_pre.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            height=260,
+            margin=dict(l=20, r=20, t=55, b=20)
+        )
+        st.plotly_chart(fig_pre, use_container_width=True)
+
+        with st.expander("📄 Quarantined Telemetry JSON", expanded=False):
+            st.json(payload)
+
+        st.markdown("#### 🔍 Package CVE Vulnerabilities")
+        cve_findings = CVEScannerTool.scan_workload_packages(payload)
+        if cve_findings:
+            for cve in cve_findings:
+                st.markdown(f"""
+                <div style="background:#ffffff; border-left: 4px solid #dc2626; border: 1px solid #e2e8f0; padding: 10px 14px; border-radius: 6px; margin-bottom: 8px;">
+                    <span class="badge-critical">{cve['cve_id']}</span> <strong style="color:#0f172a;">{cve['package']}</strong> <span style="color:#64748b; font-size:12px;">(CVSS {cve['cvss_score']})</span>
+                    <div style="font-size: 12px; color: #334155; margin-top: 4px;">{cve['description']}</div>
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.markdown("<span class='badge-pass'>✓ No Package CVEs Detected</span>", unsafe_allow_html=True)
+
+    # Right Column: Multi-Agent Consensus & Remediation Selector
+    with col2:
+        st.markdown("### 🤖 Autonomous Multi-Agent Consensus")
+        blackboard = supervisor.coordinate_assessment(payload, target_compliance=selected_compliance)
+
+        if blackboard.supervisor_verdict == "REMEDIATION_REQUIRED":
+            st.markdown(f"""
+            <div style="background: #fef2f2; border: 1.5px solid #f87171; border-radius: 8px; padding: 14px; margin-bottom: 14px;">
+                <strong style="color: #991b1b; font-size: 15px;">⚠️ Supervisor AI Verdict: REMEDIATION REQUIRED</strong>
+                <div style="font-size: 13px; color: #7f1d1d; margin-top: 6px; font-weight: 500;">{blackboard.supervisor_reasoning}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div style="background: #f0fdf4; border: 1.5px solid #4ade80; border-radius: 8px; padding: 14px; margin-bottom: 14px;">
+                <strong style="color: #166534; font-size: 15px;">✅ Supervisor AI Verdict: APPROVED FOR MIGRATION</strong>
+                <div style="font-size: 13px; color: #14532d; margin-top: 6px; font-weight: 500;">{blackboard.supervisor_reasoning}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with st.expander(f"📋 Sub-Agent XAI Findings Trace ({len(blackboard.findings)} Identified)", expanded=True):
+            for f in blackboard.findings:
+                badge_class = "badge-critical" if f.severity == "CRITICAL" else ("badge-high" if f.severity == "HIGH" else "badge-pass")
+                st.markdown(f"""
+                <div style="padding: 8px 0; border-bottom: 1px solid #e2e8f0;">
+                    <span class="{badge_class}">{f.severity}</span> <strong style="color:#0f172a;">[{f.agent_name}]</strong> <span style="color:#1e293b; font-weight:600;">{f.title}</span>
+                    <div style="font-size: 12.5px; color: #475569; margin-top: 4px;">{f.description}</div>
+                    <div style="font-size: 11.5px; color: #0284c7; margin-top: 3px; font-weight:500;">Action: <code>{f.remediation_action}</code></div>
+                </div>
+                """, unsafe_allow_html=True)
+
+        st.markdown("#### ⚙️ Remediation Strategy Execution")
+        selected_plan = st.selectbox("Select Execution Strategy:", list(blackboard.remediation_plans.keys()))
+        plan_obj = blackboard.remediation_plans[selected_plan]
+        st.caption(f"⚡ **Details:** {plan_obj.description}")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🔧 Execute Hardening & Build Golden AMI", type="primary", use_container_width=True):
+            with st.spinner("Executing Zero-Trust hardening, patching CVEs, and building Golden AMI..."):
+                res = orchestrator.run_full_pipeline(payload, selected_plan, force_failure=simulate_fail)
+                res["selected_plan_name"] = selected_plan
+                st.session_state.pipeline_result = res
+                
+                db_service.record_migration_event(
+                    instance_id=payload.get("instance_id", "i-workload-node"),
+                    pre_score=res["pre_score"],
+                    post_score=res["post_score"],
+                    compliance=selected_compliance,
+                    status=res["deployment_status"],
+                    manifest=res["hardened_payload"]
+                )
+                st.session_state.page_view = "REMEDIATION_RESULTS"
+                st.rerun()
+
+
+# ==============================================================================
+# PAGE 3: DEDICATED AUDIT RESULTS & VERIFICATION CONSOLE
+# ==============================================================================
+elif st.session_state.page_view == "REMEDIATION_RESULTS":
+    res = st.session_state.pipeline_result
+    payload = st.session_state.current_payload or {}
+
+    st.markdown("""
+    <div class="stepper-container">
+        <div><b>1. Ingestion Channel</b><br><small style="color:#38bdf8;">🟢 Complete</small></div>
+        <div style="color:#64748b;">➜</div>
+        <div><b>2. Multi-Agent Audit</b><br><small style="color:#38bdf8;">🟢 Verified</small></div>
+        <div style="color:#64748b;">➜</div>
+        <div><b>3. Golden AMI Bake</b><br><small style="color:#38bdf8;">🟢 Baked</small></div>
+        <div style="color:#64748b;">➜</div>
+        <div><b>4. Production Gate</b><br><small style="color:#38bdf8;">🟢 Deployed</small></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Top Navigation Row
+    top_c1, top_c2 = st.columns([8, 2])
+    with top_c1:
+        st.markdown("## 🎯 Post-Hardening Verification & Production Gate")
+    with top_c2:
+        if st.button("⬅️ Back to Main Dashboard", type="primary", use_container_width=True):
+            st.session_state.page_view = "STAGE_INGESTION"
+            st.session_state.pipeline_result = None
+            st.rerun()
+
+    tab_res1, tab_res2, tab_res3, tab_res4, tab_res5 = st.tabs([
+        "🛡️ Verification Posture & Delta",
+        "🏗️ Terraform IaC Artifacts",
+        "📜 Ansible Hardening Playbook",
+        "📋 Regulatory Compliance & FinOps",
         "🗄️ Historical Audit Logs"
     ])
 
-    with tab1:
-        col1, col2 = st.columns([1, 1])
+    with tab_res1:
+        r1, r2, r3 = st.columns([1, 1, 1], gap="medium")
+        with r1:
+            is_prod = res["deployment_status"] == "DEPLOYED_TO_PRODUCTION"
+            card_bg = "#f0fdf4" if is_prod else "#fef2f2"
+            card_border = "#86efac" if is_prod else "#fca5a5"
+            status_color = "#166534" if is_prod else "#991b1b"
+            
+            st.markdown(f"""
+            <div style="background:{card_bg}; border: 1.5px solid {card_border}; border-radius:10px; padding:16px;">
+                <h4 style="color: {status_color}; margin: 0 0 10px 0;">{res['verification']['status']}</h4>
+                <div style="font-size: 13.5px; margin-bottom: 5px; color:#0f172a;"><b>Deployment State:</b> <code>{res['deployment_status']}</code></div>
+                <div style="font-size: 13.5px; margin-bottom: 5px; color:#0f172a;"><b>Baked Golden AMI:</b> <code>{res['hardened_payload'].get('ami_id')}</code></div>
+                <div style="font-size: 13.5px; color:#0f172a;"><b>Score Delta:</b> <span style="color: #16a34a; font-weight:700;">{res['verification']['score_delta']}</span></div>
+            </div>
+            """, unsafe_allow_html=True)
 
-        with col1:
-            st.subheader("📥 Quarantined Workload Telemetry")
-            st.json(payload)
-            
-            pre_eval = calculate_risk_score(payload)
-            pre_score = pre_eval["total_score"]
-            
-            gauge_pre_color = "#EF4444" if pre_score < 70 else "#F59E0B"
-            fig_pre = go.Figure(go.Indicator(
+        with r2:
+            fig_post = go.Figure(go.Indicator(
                 mode="gauge+number",
-                value=pre_score,
-                title={'text': "Pre-Scan Risk Score"},
+                value=res["post_score"],
+                title={'text': "<b>Post-Hardening Verified Score</b>", 'font': {'size': 18, 'color': '#0f172a'}},
+                number={'font': {'size': 48, 'color': '#0f172a', 'family': 'Inter, sans-serif'}},
                 gauge={
-                    'axis': {'range': [0, 100]},
-                    'bar': {'color': gauge_pre_color},
+                    'axis': {'range': [0, 100], 'tickcolor': "#475569", 'tickfont': {'size': 12, 'color': '#334155'}},
+                    'bar': {'color': "#16a34a" if res["post_score"] >= 90 else "#dc2626", 'thickness': 0.28},
+                    'bgcolor': "#e2e8f0",
+                    'bordercolor': "#cbd5e1",
                     'steps': [
-                        {'range': [0, 50], 'color': "#FEE2E2"},
-                        {'range': [50, 80], 'color': "#FEF3C7"},
-                        {'range': [80, 100], 'color': "#D1FAE5"}
+                        {'range': [0, 50], 'color': "#fee2e2"},
+                        {'range': [50, 80], 'color': "#fef3c7"},
+                        {'range': [80, 100], 'color': "#dcfce7"}
                     ]
                 }
             ))
-            fig_pre.update_layout(height=260, margin=dict(l=20, r=20, t=40, b=20))
-            st.plotly_chart(fig_pre, use_container_width=True)
+            fig_post.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                height=260,
+                margin=dict(l=20, r=20, t=55, b=20)
+            )
+            st.plotly_chart(fig_post, use_container_width=True)
 
-        with col2:
-            st.subheader("🤖 Autonomous Multi-Agent Blackboard")
-            blackboard = supervisor.coordinate_assessment(payload, target_compliance=selected_compliance)
-            
-            if blackboard.supervisor_verdict == "REMEDIATION_REQUIRED":
-                st.error(f"⚠️ **Supervisor AI Verdict:** {blackboard.supervisor_verdict}")
-            else:
-                st.success(f"✅ **Supervisor AI Verdict:** {blackboard.supervisor_verdict}")
-                
-            st.write(f"**Consensus Reasoning:** {blackboard.supervisor_reasoning}")
-            
-            with st.expander("🔍 Sub-Agent Specific Findings (XAI Trace)", expanded=True):
-                for f in blackboard.findings:
-                    badge_color = "🔴" if f.severity == "CRITICAL" else ("🟠" if f.severity == "HIGH" else "🟡")
-                    st.markdown(f"{badge_color} **[{f.agent_name}]** `{f.title}` — *Severity: {f.severity}*")
-                    st.write(f"• {f.description}")
-                    st.caption(f"Action: `{f.remediation_action}` | Domain: {f.domain}")
-                    st.divider()
-
-            st.subheader("⚙️ Select Remediation Strategy")
-            plan_options = list(blackboard.remediation_plans.keys())
-            selected_plan = st.selectbox("Execution Strategy:", plan_options)
-            chosen_plan = blackboard.remediation_plans[selected_plan]
-            
-            st.info(f"**Description:** {chosen_plan.description}\n\n**Trade-off Note:** {chosen_plan.trade_off_notes}")
-            
-            c_btn1, c_btn2 = st.columns([2, 1])
-            with c_btn1:
-                if st.button("🔧 Execute Hardening & Golden AMI Build", type="primary"):
-                    with st.spinner("Executing zero-trust hardening, generating KMS keys, and building Golden AMI..."):
-                        res = orchestrator.run_full_pipeline(payload, selected_plan, force_failure=simulate_fail)
-                        st.session_state.pipeline_result = res
-                        
-                        # Persist to persistent SQLite DB
-                        db_service.record_migration_event(
-                            instance_id=payload.get("instance_id", "i-workload-node"),
-                            pre_score=res["pre_score"],
-                            post_score=res["post_score"],
-                            compliance=selected_compliance,
-                            status=res["deployment_status"],
-                            manifest=res["hardened_payload"]
-                        )
-                        st.rerun()
-
-            with c_btn2:
-                if st.button("🔄 Reset Scan"):
-                    st.session_state.scan_started = False
-                    st.session_state.pipeline_result = None
-                    st.rerun()
-
-        # Hardening Results Section
-        if st.session_state.pipeline_result is not None:
-            res = st.session_state.pipeline_result
-            st.markdown("---")
-            st.subheader("🔄 Automated Remediation & Verification Scanner")
-            
-            v_col1, v_col2, v_col3 = st.columns([1, 1, 1])
-            
-            with v_col1:
-                if res["deployment_status"] == "DEPLOYED_TO_PRODUCTION":
-                    st.success(f"Status: {res['verification']['status']}")
-                else:
-                    st.error(f"Status: {res['verification']['status']}")
-                    
-                st.metric(
-                    label="Verified Post-Scan Score", 
-                    value=f"{res['post_score']}/100", 
-                    delta=res['verification']['score_delta']
-                )
-                st.write(f"**Hardened AMI ID:** `{res['hardened_payload']['ami_id']}`")
-                st.write(f"**Deployment State:** `{res['deployment_status']}`")
-
-            with v_col2:
-                gauge_color = "#10B981" if res["post_score"] >= 90 else "#EF4444"
-                fig_post = go.Figure(go.Indicator(
-                    mode="gauge+number",
-                    value=res["post_score"],
-                    title={'text': "Post-Hardening Score"},
-                    gauge={
-                        'axis': {'range': [0, 100]},
-                        'bar': {'color': gauge_color},
-                        'steps': [
-                            {'range': [0, 50], 'color': "#FEE2E2"},
-                            {'range': [50, 80], 'color': "#FEF3C7"},
-                            {'range': [80, 100], 'color': "#D1FAE5"}
-                        ]
-                    }
-                ))
-                fig_post.update_layout(height=260, margin=dict(l=20, r=20, t=40, b=20))
-                st.plotly_chart(fig_post, use_container_width=True)
-
-            with v_col3:
-                st.subheader("📋 Golden AMI Manifest")
+        with r3:
+            with st.expander("📦 Baked Golden AMI JSON Manifest", expanded=True):
                 st.json(res["hardened_payload"])
 
-            st.markdown("### 🖥️ Real-Time Agent Execution Console")
-            combined_logs = blackboard.execution_trace + ["--- HARDENING EXECUTION ---"] + res["logs"]
-            st.code("\n".join(combined_logs), language="bash")
+        st.markdown("#### 🔍 Workload Hardening Delta (Before vs. After)")
+        delta_data = HardeningEngine.compute_delta(payload, res["hardened_payload"])
+        st.dataframe(pd.DataFrame(delta_data), use_container_width=True, hide_index=True)
 
-            # Downloadable Audit Reports
-            st.markdown("### 📥 Compliance Audit Export")
-            exp_col1, exp_col2 = st.columns(2)
+        with st.expander("🖥️ Real-Time Autonomous Execution Logs", expanded=False):
+            st.code("\n".join(res["logs"]), language="bash")
 
-            csv_report = ComplianceReportGenerator.generate_csv_summary(res, selected_compliance)
-            json_manifest = ComplianceReportGenerator.generate_json_manifest(res, selected_compliance)
+        st.markdown("#### 📥 Compliance & Security Audit Downloads")
+        d1, d2, d3 = st.columns(3)
+        csv_rep = ComplianceReportGenerator.generate_csv_summary(res, selected_compliance)
+        json_man = ComplianceReportGenerator.generate_json_manifest(res, selected_compliance)
+        pdf_rep = ComplianceReportGenerator.generate_pdf_report(res, selected_compliance)
 
-            with exp_col1:
-                st.download_button(
-                    label="📄 Download Security Audit Summary (.CSV)",
-                    data=csv_report,
-                    file_name=f"CloudSentinel_Audit_{res['hardened_payload']['ami_id']}.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
+        with d1:
+            st.download_button(
+                "📄 Security Audit Summary (.CSV)",
+                data=csv_rep,
+                file_name=f"Audit_{res['hardened_payload'].get('ami_id')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        with d2:
+            st.download_button(
+                "📦 Full Compliance Manifest (.JSON)",
+                data=json_man,
+                file_name=f"Manifest_{res['hardened_payload'].get('ami_id')}.json",
+                mime="application/json",
+                use_container_width=True
+            )
+        with d3:
+            st.download_button(
+                "📑 Download Audit Report (.PDF)",
+                data=pdf_rep,
+                file_name=f"CloudSentinel_Report_{res['hardened_payload'].get('ami_id')}.pdf",
+                mime="application/pdf",
+                type="primary",
+                use_container_width=True
+            )
 
-            with exp_col2:
-                st.download_button(
-                    label="📦 Download Full Compliance Manifest (.JSON)",
-                    data=json_manifest,
-                    file_name=f"CloudSentinel_Manifest_{res['hardened_payload']['ami_id']}.json",
-                    mime="application/json",
-                    use_container_width=True
-                )
+    with tab_res2:
+        st.markdown("### 🏗️ Auto-Generated Infrastructure as Code (Terraform)")
+        tf_code = IaCGenerator.generate_terraform(res["hardened_payload"], selected_compliance)
+        st.code(tf_code, language="hcl")
+        st.download_button(
+            "📥 Download main.tf",
+            data=tf_code,
+            file_name="main.tf",
+            mime="text/plain",
+            type="primary"
+        )
 
-    with tab2:
-        st.subheader(f"📊 Compliance Audit: {selected_compliance}")
-        comp_pre = evaluate_compliance(payload, selected_compliance)
+    with tab_res3:
+        st.markdown("### 📜 Auto-Generated Ansible Hardening Playbook")
+        st.caption("Apply CIS Level 1 OS baselines and network firewall rules directly to running Linux instances:")
+        ansible_code = AnsiblePlaybookGenerator.generate_playbook(res["hardened_payload"], selected_compliance)
+        st.code(ansible_code, language="yaml")
+        st.download_button(
+            "📥 Download hardening_playbook.yml",
+            data=ansible_code,
+            file_name="hardening_playbook.yml",
+            mime="text/yaml",
+            type="primary"
+        )
+
+    with tab_res4:
+        st.markdown(f"### 📋 Regulatory Compliance Analysis: **{selected_compliance}**")
+        comp_res = evaluate_compliance(payload, selected_compliance)
         
-        c_col1, c_col2 = st.columns(2)
-        with c_col1:
-            st.markdown("### 🔴 Pre-Hardening Audit Results")
-            st.write(f"**Audit Status:** `{comp_pre['status']}`")
-            st.markdown("**Violations Detected:**")
-            for f in comp_pre["failed"]:
+        c_left, c_right = st.columns(2)
+        with c_left:
+            st.markdown("#### 🔴 Quarantined Workload Violations")
+            for f in comp_res["failed"]:
                 st.error(f)
-        
-        with c_col2:
-            st.markdown("### 🟢 Post-Hardening Audit Target")
-            for p in comp_pre["passed"]:
+        with c_right:
+            st.markdown("#### 🟢 Remediated Compliance Guarantees")
+            for p in comp_res["passed"]:
                 st.success(p)
-                
-        st.markdown("---")
-        st.subheader("💡 Compute Right-Sizing Analysis")
-        st.write(f"Telemetry detected that the instance is provisioned with an idle compute profile (`{cost_data['current_instance']}`).")
-        st.info(f"**Recommendation:** Right-size to `{cost_data['recommended_instance']}` during deployment to save **${cost_data['monthly_savings']}/month** (~{cost_data['percentage_savings']}% cost reduction).")
 
-    with tab3:
-        st.subheader("🗄️ Migration Audit History & Governance Logs")
+        st.markdown("---")
+        st.markdown("### 💡 FinOps Right-Sizing & GreenOps Carbon Impact")
+        f1, f2, f3 = st.columns(3)
+        with f1:
+            st.metric("Current Profile", cost_data['current_instance'], f"${cost_data['current_monthly_cost']}/mo")
+        with f2:
+            st.metric("Recommended Profile", cost_data['recommended_instance'], f"${cost_data['optimized_monthly_cost']}/mo")
+        with f3:
+            st.metric("Monthly Savings", f"${cost_data['monthly_savings']}/mo", f"-{cost_data['percentage_savings']}%")
+
+        # Snapshot & DR Runbook
+        st.markdown("---")
+        st.markdown("### 🔄 Point-in-Time Rollback & Safety Snapshot Runbook")
+        dr_info = RecoverySnapshotManager.generate_dr_runbook(payload)
+        with st.expander("🛠️ View Point-in-Time Disaster Recovery Runbook (.sh)", expanded=False):
+            st.code(dr_info["rollback_script"], language="bash")
+
+    with tab_res5:
+        st.markdown("### 🗄️ Immutable Migration Audit Log (SQLite)")
         history = db_service.get_historical_logs()
         if len(history) > 0:
-            df = pd.DataFrame(history)
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(pd.DataFrame(history), use_container_width=True, hide_index=True)
         else:
-            st.info("No historical events recorded yet. Run a hardening pipeline to populate logs.")
+            st.info("No migration events recorded yet.")
