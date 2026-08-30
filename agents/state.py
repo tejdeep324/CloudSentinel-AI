@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional
 import time
-import threading
 
 @dataclass
 class AgentFinding:
@@ -26,7 +25,7 @@ class RemediationPlan:
 
 @dataclass
 class AgentBlackboard:
-    """Thread-safe shared state container passed between agents in the collaborative pipeline."""
+    """Shared state container passed between agents in the collaborative pipeline."""
     workload_payload: Dict[str, Any]
     target_compliance: str = "PCI-DSS (Payment Card Security)"
     pre_scan_score: int = 100
@@ -37,20 +36,16 @@ class AgentBlackboard:
     remediation_plans: Dict[str, RemediationPlan] = field(default_factory=dict)
     execution_trace: List[str] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
-    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def log_trace(self, agent_name: str, message: str):
         timestamp = time.strftime("%H:%M:%S")
-        with self._lock:
-            self.execution_trace.append(f"[{timestamp}] [{agent_name}] {message}")
+        self.execution_trace.append(f"[{timestamp}] [{agent_name}] {message}")
 
     def add_finding(self, finding: AgentFinding):
-        with self._lock:
-            self.findings.append(finding)
+        self.findings.append(finding)
 
     def to_dict(self) -> Dict[str, Any]:
-        with self._lock:
-            return {
+        return {
             "target_compliance": self.target_compliance,
             "pre_scan_score": self.pre_scan_score,
             "post_scan_score": self.post_scan_score,

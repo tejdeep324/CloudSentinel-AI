@@ -46,11 +46,8 @@ class WorkloadInspectorTool:
                 src = str(rule.get("source", ""))
                 port = rule.get("port")
                 if src in ["0.0.0.0/0", "::/0"]:
-                    # Legitimate web ports (HTTP/HTTPS) are standard ingress for web tier
-                    if port in [80, 443]:
-                        continue
                     # Flag administrative and critical database ports with CRITICAL severity
-                    severity = "CRITICAL" if port in [22, 3389, 3306, 5432, 27017] else "MEDIUM"
+                    severity = "CRITICAL" if port in [22, 3389, 3306, 5432, 27017] else "HIGH"
                     exposed.append({
                         "port": port,
                         "protocol": rule.get("protocol", "tcp"),

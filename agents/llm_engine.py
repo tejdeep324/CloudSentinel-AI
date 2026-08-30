@@ -8,20 +8,13 @@ from pydantic import BaseModel, Field
 # Ensure project root is available in path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-GOOGLE_GENAI_SDK = None
+GENAI_AVAILABLE = False
 try:
     from google import genai
     from google.genai import types
-    GOOGLE_GENAI_SDK = "genai"
+    GENAI_AVAILABLE = True
 except Exception:
-    try:
-        import warnings
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            import google.generativeai as legacy_genai
-        GOOGLE_GENAI_SDK = "legacy"
-    except Exception:
-        GOOGLE_GENAI_SDK = None
+    GENAI_AVAILABLE = False
 
 
 # ==========================================
@@ -38,30 +31,22 @@ class FindingItem(BaseModel):
 class AgentAuditResponse(BaseModel):
     verdict: str = Field(description="FLAGGED or CLEARED")
     findings: List[FindingItem] = Field(default_factory=list)
-    reasoning: str = Field(description="Summary explanation of findings")
+    reasoning: str = Field(description="Cognitive reasoning trace synthesizing the findings")
 
 
 # ==========================================
-# GOOGLE GEMINI AGENT ENGINE
+# HIGH-PERFORMANCE GOOGLE AGENT ENGINE
 # ==========================================
 
 class GoogleAgentEngine:
-    """Interface for dispatching Gemini models for domain telemetry analysis."""
+    """Enterprise-grade interface for dispatching autonomous Gemini agents."""
 
     def __init__(self):
         self.api_key = os.getenv("GEMINI_API_KEY", "")
         self.client = None
-        self.sdk_mode = GOOGLE_GENAI_SDK
-        
-        if self.api_key and self.sdk_mode == "genai":
+        if GENAI_AVAILABLE and self.api_key:
             try:
                 self.client = genai.Client(api_key=self.api_key)
-            except Exception:
-                self.client = None
-        elif self.api_key and self.sdk_mode == "legacy":
-            try:
-                legacy_genai.configure(api_key=self.api_key)
-                self.client = legacy_genai
             except Exception:
                 self.client = None
 
@@ -74,12 +59,12 @@ class GoogleAgentEngine:
         system_instruction: str,
         domain_payload: Dict[str, Any]
     ) -> Optional[AgentAuditResponse]:
-        """Executes domain assessment with strict structured JSON output."""
+        """Executes domain assessment via chat session with strict JSON structure."""
         if not self.is_live():
             return None
 
         prompt = f"""
-        You are a cloud security domain auditor specializing in {domain_name}.
+        You are an autonomous cloud security sub-agent specializing in {domain_name}.
         Analyze the scoped workload telemetry below and identify all critical security and compliance vulnerabilities.
 
         SCOPED WORKLOAD TELEMETRY:
@@ -92,39 +77,28 @@ class GoogleAgentEngine:
                 {{
                     "title": "Short finding title",
                     "severity": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",
-                    "description": "Detailed description of vulnerability",
+                    "description": "Detailed reasoning",
                     "action": "Remediation action string",
-                    "confidence": 1.0
+                    "confidence": 0.98
                 }}
             ],
-            "reasoning": "Summary of evaluation findings"
+            "reasoning": "Summary of agent cognitive reasoning"
         }}
         """
 
         try:
-            if self.sdk_mode == "genai":
-                chat = self.client.chats.create(
-                    model="gemini-2.5-flash",
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_instruction,
-                        response_mime_type="application/json",
-                        temperature=0.1
-                    )
-                )
-                response = chat.send_message(prompt)
-                if response and response.text:
-                    parsed = json.loads(response.text)
-                    return AgentAuditResponse(**parsed)
-            elif self.sdk_mode == "legacy":
-                model = self.client.GenerativeModel(
-                    model_name="gemini-1.5-flash",
+            chat = self.client.chats.create(
+                model="gemini-2.5-flash",
+                config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
-                    generation_config={"response_mime_type": "application/json", "temperature": 0.1}
+                    response_mime_type="application/json",
+                    temperature=0.1
                 )
-                response = model.generate_content(prompt)
-                if response and response.text:
-                    parsed = json.loads(response.text)
-                    return AgentAuditResponse(**parsed)
+            )
+            response = chat.send_message(prompt)
+            if response and response.text:
+                parsed = json.loads(response.text)
+                return AgentAuditResponse(**parsed)
         except Exception:
             return None
         return None
@@ -136,12 +110,11 @@ class GoogleAgentEngine:
         domain_payload: Dict[str, Any]
     ) -> Optional[AgentAuditResponse]:
         """Asynchronously dispatches domain evaluations in a non-blocking thread."""
-        try:
-            return await asyncio.to_thread(
-                self.analyze_domain_sync,
-                domain_name,
-                system_instruction,
-                domain_payload
-            )
-        except Exception:
-            return None
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            self.analyze_domain_sync,
+            domain_name,
+            system_instruction,
+            domain_payload
+        )

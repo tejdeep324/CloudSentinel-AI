@@ -26,7 +26,7 @@ class TestCloudSentinelPipeline(unittest.TestCase):
         """Quantitative pre-scan scoring engine must calculate deductions accurately."""
         res = calculate_risk_score(self.payload)
         self.assertIn("total_score", res)
-        self.assertEqual(res["total_score"], 10)
+        self.assertEqual(res["total_score"], 40)
         self.assertIn("category_breakdown", res)
         self.assertEqual(res["category_breakdown"]["storage"], 0)
 

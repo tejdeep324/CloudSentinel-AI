@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from agents.state import AgentBlackboard
 
 class BaseAgent:
-    """Base class for CloudSentinel domain security evaluation agents."""
+    """Base cognitive architecture for CloudSentinel domain agents."""
 
     def __init__(self, name: str, domain: str, system_prompt: str):
         self.name = name
@@ -17,5 +17,5 @@ class BaseAgent:
         self.memory: List[Dict[str, str]] = []
 
     def evaluate(self, blackboard: AgentBlackboard) -> None:
-        """Evaluates workload against domain policies and records findings to blackboard."""
+        """Core execution cycle: Inspect -> Reason -> Write to Shared Blackboard."""
         raise NotImplementedError("Subclasses must implement the evaluate() method.")

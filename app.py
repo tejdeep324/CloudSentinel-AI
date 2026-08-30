@@ -160,12 +160,8 @@ if "page_view" not in st.session_state:
     st.session_state.page_view = "STAGE_INGESTION"
 if "pipeline_result" not in st.session_state:
     st.session_state.pipeline_result = None
-if "current_payload" not in st.session_state or st.session_state.current_payload is None:
-    try:
-        with open("data/sample_payload.json", "r") as f:
-            st.session_state.current_payload = json.load(f)
-    except Exception:
-        st.session_state.current_payload = {}
+if "current_payload" not in st.session_state:
+    st.session_state.current_payload = None
 
 # ----------------- SIDEBAR -----------------
 with st.sidebar:
@@ -186,6 +182,15 @@ with st.sidebar:
         "🎯 Target Compliance Framework",
         list(COMPLIANCE_STANDARDS.keys())
     )
+
+    st.markdown("### 💰 FinOps & GreenOps")
+    cost_data = FinOpsCostCalculatorTool.calculate_rightsizing_projection("m5.large")
+    c_side1, c_side2 = st.columns(2)
+    with c_side1:
+        st.metric("Monthly Savings", f"${cost_data['monthly_savings']}/mo", f"-{cost_data['percentage_savings']}%")
+    with c_side2:
+        st.metric("CO₂ Cut", f"{cost_data['monthly_co2_reduction_kg']} kg", "Green Tier")
+
     st.markdown("---")
     simulate_fail = st.checkbox("🧪 Test Chaos Rollback")
 
@@ -195,7 +200,7 @@ with st.sidebar:
 # ==============================================================================
 if st.session_state.page_view == "STAGE_INGESTION":
 
-    st.markdown("## 🛡️ Workload Security & Migration Gateway")
+    st.markdown("## 🛡️ Autonomous Migration Security Control Plane")
     
     with st.expander("ℹ️ **About CloudSentinel AI & Full AWS Stack Architecture**", expanded=False):
         st.markdown("""
@@ -241,17 +246,15 @@ if st.session_state.page_view == "STAGE_INGESTION":
                 "Scenario 3: Web App (Partially Hardened)"
             ]
         )
-        if st.button("📥 Load Selected Preset Telemetry", use_container_width=True) or st.session_state.current_payload is None:
-            if "Scenario 2" in preset_choice:
-                with open("data/database_payload.json", "r") as f:
-                    workload_payload = json.load(f)
-            elif "Scenario 3" in preset_choice:
-                with open("data/webapp_payload.json", "r") as f:
-                    workload_payload = json.load(f)
-            else:
-                with open("data/sample_payload.json", "r") as f:
-                    workload_payload = json.load(f)
-            st.session_state.current_payload = workload_payload
+        if "Scenario 2" in preset_choice:
+            with open("data/database_payload.json", "r") as f:
+                workload_payload = json.load(f)
+        elif "Scenario 3" in preset_choice:
+            with open("data/webapp_payload.json", "r") as f:
+                workload_payload = json.load(f)
+        else:
+            with open("data/sample_payload.json", "r") as f:
+                workload_payload = json.load(f)
 
     # Channel 2: Live AWS Boto3 Discovery (With All Target Regions)
     with ingest_tab2:
@@ -297,13 +300,8 @@ if st.session_state.page_view == "STAGE_INGESTION":
                 "storage": {"volume_id": "vol-custom-01", "encrypted": form_storage_enc, "kms_key_id": "arn:aws:kms:us-east-1:1111:key/01" if form_storage_enc else None},
                 "network": {"public_ip_assigned": True, "security_group_rules": sg_rules},
                 "iam": {"attached_role": form_role, "least_privilege_compliant": form_role == "CloudSentinelScopedMigrationRole"},
-                "os_security": {
-                    "root_login_enabled": form_root_login,
-                    "password_auth_enabled": form_pass_auth,
-                    "cis_benchmark_compliant": not (form_root_login or form_pass_auth)
-                }
+                "os_security": {"root_login_enabled": form_root_login, "password_auth_enabled": form_pass_auth, "cis_benchmark_compliant": False}
             }
-            st.session_state.current_payload = workload_payload
             st.success("Custom workload staged successfully.")
 
     # Channel 4: JSON Upload & Extractor Guide (With Auto-Unwrapping)
@@ -313,19 +311,10 @@ if st.session_state.page_view == "STAGE_INGESTION":
         if uploaded is not None:
             try:
                 raw_json = json.load(uploaded)
-                if isinstance(raw_json, dict) and "golden_ami_manifest" in raw_json:
-                    workload_payload = raw_json["golden_ami_manifest"]
-                    st.info("📦 Detected CloudSentinel Audit Manifest — extracted Golden AMI workload telemetry.")
-                elif isinstance(raw_json, dict) and "hardened_payload" in raw_json:
-                    workload_payload = raw_json["hardened_payload"]
-                elif isinstance(raw_json, dict) and "workload_payload" in raw_json:
-                    workload_payload = raw_json["workload_payload"]
-                else:
-                    workload_payload = raw_json
-                st.session_state.current_payload = workload_payload
-                st.success("JSON ingested successfully.")
-            except Exception:
-                st.error("Invalid JSON file.")
+                workload_payload = unwrap_payload(raw_json)
+                st.success("JSON telemetry uploaded, verified, and staged successfully.")
+            except Exception as e:
+                st.error(f"Invalid JSON file: {str(e)}")
 
         st.markdown("---")
         st.markdown("### 🛠️ How to Generate This JSON from Your AWS Account")
@@ -367,70 +356,69 @@ if sg_id:
             sg_rules.append({"port": port, "protocol": proto, "source": ip.get("CidrIp", "")})
 
 # IAM Role check
-iam_role = instance.get("IamInstanceProfile", {}).get("Arn", "None").split("/")[-1]
+iam_arn = instance.get("IamInstanceProfile", {}).get("Arn", "None")
+role_name = iam_arn.split("/")[-1] if "arn" in iam_arn else "None"
 
-# 3. Assemble JSON Payload
-payload = {
-    "instance_id": instance["InstanceId"],
-    "ami_id": instance["ImageId"],
-    "instance_type": instance.get("InstanceType", "m5.large"),
-    "os": "RedHat Enterprise Linux 8",
-    "network": {
-        "vpc_id": instance.get("VpcId", "vpc-unknown"),
-        "subnet_id": instance.get("SubnetId", "subnet-unknown"),
-        "public_ip_assigned": bool(instance.get("PublicIpAddress")),
-        "security_group_rules": sg_rules
-    },
+# 3. Assemble CloudSentinel Standard Schema
+telemetry = {
+    "instance_id": INSTANCE_ID,
+    "instance_type": instance.get("InstanceType", "t3.medium"),
     "storage": {
         "volume_id": vol_id,
         "encrypted": vol_info.get("Encrypted", False),
         "kms_key_id": vol_info.get("KmsKeyId", None)
     },
+    "network": {
+        "public_ip_assigned": bool(instance.get("PublicIpAddress")),
+        "security_group_rules": sg_rules
+    },
     "iam": {
-        "attached_role": iam_role,
-        "least_privilege_compliant": False if "admin" in iam_role.lower() else True
+        "attached_role": role_name,
+        "least_privilege_compliant": "admin" not in role_name.lower() and role_name != "None"
     },
     "os_security": {
         "root_login_enabled": True,
         "password_auth_enabled": True,
         "cis_benchmark_compliant": False
-    }
+    },
+    "packages": [
+        {"name": "openssh-server", "version": "8.2p1"},
+        {"name": "libssl1.1", "version": "1.1.1f"}
+    ]
 }
 
+# 4. Save to JSON
 with open("workload_telemetry.json", "w") as f:
-    json.dump(payload, f, indent=2)
+    json.dump(telemetry, f, indent=2)
 
-print("Saved telemetry to workload_telemetry.json successfully!")
+print("Generated workload_telemetry.json successfully!")
 """
             st.code(extractor_script, language="python")
             st.download_button(
-                label="📥 Download Python Extractor Script (.py)",
+                "📥 Download extract_telemetry.py",
                 data=extractor_script,
-                file_name="extract_aws_telemetry.py",
-                mime="text/x-python"
+                file_name="extract_telemetry.py",
+                mime="text/x-python",
+                type="primary"
             )
 
         with json_method2:
-            st.caption("Copy this standard JSON schema, fill in your AWS configuration parameters, and save as `.json`:")
+            st.caption("Copy this template into a text editor (e.g., Notepad / VS Code) and populate the values directly from your AWS Console:")
             
             sample_json_template = {
-                "instance_id": "i-0987654321fedcba0",
-                "ami_id": "ami-0123456789abcdef0",
+                "instance_id": "i-0a8f9214b7e1234a5",
                 "instance_type": "m5.large",
-                "os": "Ubuntu 22.04 LTS",
+                "storage": {
+                    "volume_id": "vol-0192837465abcde12",
+                    "encrypted": False,
+                    "kms_key_id": None
+                },
                 "network": {
-                    "vpc_id": "vpc-0a1b2c3d4e5f6g7h8",
-                    "subnet_id": "subnet-0a1b2c3d4e5f6g7h8",
                     "public_ip_assigned": True,
                     "security_group_rules": [
                         {"port": 22, "protocol": "tcp", "source": "0.0.0.0/0"},
-                        {"port": 443, "protocol": "tcp", "source": "0.0.0.0/0"}
+                        {"port": 3389, "protocol": "tcp", "source": "0.0.0.0/0"}
                     ]
-                },
-                "storage": {
-                    "volume_id": "vol-0a1b2c3d4e5f6g7h8",
-                    "encrypted": False,
-                    "kms_key_id": None
                 },
                 "iam": {
                     "attached_role": "AdministratorAccess",
@@ -442,10 +430,10 @@ print("Saved telemetry to workload_telemetry.json successfully!")
                     "cis_benchmark_compliant": False
                 }
             }
-            st.json(sample_json_template)
             
+            st.code(json.dumps(sample_json_template, indent=2), language="json")
             st.download_button(
-                label="📥 Download Sample JSON Template (.json)",
+                "📥 Download workload_template.json",
                 data=json.dumps(sample_json_template, indent=2),
                 file_name="workload_template.json",
                 mime="application/json"
@@ -610,7 +598,7 @@ elif st.session_state.page_view == "MULTI_AGENT_AUDIT":
             </div>
             """, unsafe_allow_html=True)
 
-        with st.expander(f"📋 Sub-Agent Security Findings ({len(blackboard.findings)} Identified)", expanded=True):
+        with st.expander(f"📋 Sub-Agent XAI Findings Trace ({len(blackboard.findings)} Identified)", expanded=True):
             for f in blackboard.findings:
                 badge_class = "badge-critical" if f.severity == "CRITICAL" else ("badge-high" if f.severity == "HIGH" else "badge-pass")
                 st.markdown(f"""
@@ -627,19 +615,13 @@ elif st.session_state.page_view == "MULTI_AGENT_AUDIT":
         st.caption(f"⚡ **Details:** {plan_obj.description}")
 
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔧 Execute Hardening & Build Golden AMI (AWS SDK)", type="primary", use_container_width=True):
-            with st.spinner("Invoking AWS KMS, modifying Security Groups, and baking Golden AMI via AWS SDK..."):
-                res = orchestrator.run_full_pipeline(
-                    payload,
-                    selected_plan,
-                    target_compliance=selected_compliance,
-                    force_failure=simulate_fail
-                )
+        if st.button("🔧 Execute Hardening & Build Golden AMI", type="primary", use_container_width=True):
+            with st.spinner("Invoking AWS KMS, SQS queues, and baking Golden AMI..."):
+                res = orchestrator.run_full_pipeline(payload, selected_plan, force_failure=simulate_fail)
                 res["selected_plan_name"] = selected_plan
                 
-                # Run live AWS hardening hooks
-                baked_ami = res.get("hardened_payload", {}).get("ami_id")
-                aws_exec_res = aws_service.execute_live_hardening(payload, selected_plan, ami_id=baked_ami)
+                # AWS Live Service + SNS Integration
+                aws_exec_res = aws_service.execute_live_hardening(payload, selected_plan)
                 res["logs"].extend(aws_exec_res["logs"])
                 
                 sns_res = AWSOrchestrationService.publish_sns_security_alert(
@@ -671,11 +653,7 @@ elif st.session_state.page_view == "REMEDIATION_RESULTS":
     res = st.session_state.pipeline_result
     payload = st.session_state.current_payload or {}
 
-    is_prod = res.get("deployment_status") == "DEPLOYED_TO_PRODUCTION"
-    gate_label = "🟢 Deployed" if is_prod else "🔴 Rolled Back"
-    gate_color = "#38bdf8" if is_prod else "#ef4444"
-
-    st.markdown(f"""
+    st.markdown("""
     <div class="stepper-container">
         <div><b>1. Ingestion Channel</b><br><small style="color:#38bdf8;">🟢 Complete</small></div>
         <div style="color:#64748b;">➜</div>
@@ -683,7 +661,7 @@ elif st.session_state.page_view == "REMEDIATION_RESULTS":
         <div style="color:#64748b;">➜</div>
         <div><b>3. Golden AMI Bake</b><br><small style="color:#38bdf8;">🟢 Baked</small></div>
         <div style="color:#64748b;">➜</div>
-        <div><b>4. Production Gate</b><br><small style="color:{gate_color};">{gate_label}</small></div>
+        <div><b>4. Production Gate</b><br><small style="color:#38bdf8;">🟢 Deployed</small></div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -826,36 +804,27 @@ elif st.session_state.page_view == "REMEDIATION_RESULTS":
 
     with tab_res5:
         st.markdown(f"### 📋 Regulatory Compliance Analysis: **{selected_compliance}**")
-        comp_pre = evaluate_compliance(payload, selected_compliance)
-        comp_post = evaluate_compliance(res.get("hardened_payload") or {}, selected_compliance)
+        comp_res = evaluate_compliance(payload, selected_compliance)
         
         c_left, c_right = st.columns(2)
         with c_left:
             st.markdown("#### 🔴 Quarantined Workload Violations")
-            if comp_pre["failed"]:
-                for f in comp_pre["failed"]:
-                    st.error(f)
-            else:
-                st.info("No quarantined violations in baseline.")
+            for f in comp_res["failed"]:
+                st.error(f)
         with c_right:
             st.markdown("#### 🟢 Remediated Compliance Guarantees")
-            if comp_post["passed"]:
-                for p in comp_post["passed"]:
-                    st.success(p)
-            else:
-                st.warning("Compliance guarantees could not be established.")
+            for p in comp_res["passed"]:
+                st.success(p)
 
         st.markdown("---")
         st.markdown("### 💡 FinOps Right-Sizing & GreenOps Carbon Impact")
-        inst_type = (res.get("hardened_payload") or {}).get("instance_type") or payload.get("instance_type", "m5.large")
-        res_cost_data = FinOpsCostCalculatorTool.calculate_rightsizing_projection(inst_type)
         f1, f2, f3 = st.columns(3)
         with f1:
-            st.metric("Current Profile", res_cost_data['current_instance'], f"${res_cost_data['current_monthly_cost']}/mo")
+            st.metric("Current Profile", cost_data['current_instance'], f"${cost_data['current_monthly_cost']}/mo")
         with f2:
-            st.metric("Recommended Profile", res_cost_data['recommended_instance'], f"${res_cost_data['optimized_monthly_cost']}/mo")
+            st.metric("Recommended Profile", cost_data['recommended_instance'], f"${cost_data['optimized_monthly_cost']}/mo")
         with f3:
-            st.metric("Monthly Savings", f"${res_cost_data['monthly_savings']}/mo", f"-{res_cost_data['percentage_savings']}%")
+            st.metric("Monthly Savings", f"${cost_data['monthly_savings']}/mo", f"-{cost_data['percentage_savings']}%")
 
         # Snapshot & DR Runbook
         st.markdown("---")

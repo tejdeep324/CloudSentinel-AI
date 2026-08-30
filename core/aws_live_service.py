@@ -91,25 +91,16 @@ class AWSLiveService:
             has_public_ip = bool(instance.get("PublicIpAddress"))
 
             # Storage inspection via AWS EC2 BlockDeviceMappings
-            block_devices = instance.get("BlockDeviceMappings") or []
-            volume_id = "vol-none"
-            is_encrypted = False
-            kms_key_id = None
-            if block_devices and isinstance(block_devices[0], dict) and "Ebs" in block_devices[0]:
-                volume_id = block_devices[0]["Ebs"].get("VolumeId", "vol-none")
-                if volume_id != "vol-none":
-                    try:
-                        vol_resp = self.ec2_client.describe_volumes(VolumeIds=[volume_id])
-                        if vol_resp.get("Volumes"):
-                            vol_info = vol_resp["Volumes"][0]
-                            is_encrypted = vol_info.get("Encrypted", False)
-                            kms_key_id = vol_info.get("KmsKeyId")
-                    except Exception:
-                        pass
+            block_devices = instance.get("BlockDeviceMappings", [])
+            volume_id = block_devices[0]["Ebs"]["VolumeId"] if block_devices else "vol-unknown"
+            vol_resp = self.ec2_client.describe_volumes(VolumeIds=[volume_id])
+            vol_info = vol_resp["Volumes"][0]
+            is_encrypted = vol_info.get("Encrypted", False)
+            kms_key_id = vol_info.get("KmsKeyId")
 
             # Network inspection via AWS Security Groups
             sg_rules = []
-            sg_ids = [sg["GroupId"] for sg in instance.get("SecurityGroups", []) if isinstance(sg, dict) and "GroupId" in sg]
+            sg_ids = [sg["GroupId"] for sg in instance.get("SecurityGroups", [])]
             if sg_ids:
                 sgs_resp = self.ec2_client.describe_security_groups(GroupIds=sg_ids)
                 for sg in sgs_resp.get("SecurityGroups", []):
@@ -125,9 +116,8 @@ class AWSLiveService:
                             })
 
             # IAM profile inspection
-            iam_dict = instance.get("IamInstanceProfile") or {}
-            iam_profile = iam_dict.get("Arn", "None") if isinstance(iam_dict, dict) else "None"
-            role_name = iam_profile.split("/")[-1] if "arn" in iam_profile.lower() else "None"
+            iam_profile = instance.get("IamInstanceProfile", {}).get("Arn", "None")
+            role_name = iam_profile.split("/")[-1] if "arn" in iam_profile else "None"
             is_least_priv = "admin" not in role_name.lower() and role_name != "None"
 
             return {
@@ -156,40 +146,25 @@ class AWSLiveService:
         except Exception as e:
             raise RuntimeError(f"Error communicating with AWS: {str(e)}")
 
-    def execute_live_hardening(self, payload: Dict[str, Any], plan_name: str, ami_id: Optional[str] = None) -> Dict[str, Any]:
+    def execute_live_hardening(self, payload: Dict[str, Any], plan_name: str) -> Dict[str, Any]:
         """Executes operations across AWS KMS, EC2, VPC, S3, and DynamoDB."""
-        if not isinstance(payload, dict):
-            payload = {}
         instance_id = payload.get("instance_id", "i-live-workload")
-        generated_ami = ami_id or payload.get("ami_id") or f"ami-hardened-golden-{int(time.time())}"
-        generated_kms = f"arn:aws:kms:{self.region_name}:123456789012:key/cloudsentinel-cmk-01"
+        generated_ami = f"ami-cloudsentinel-golden-{int(time.time())}"
+        generated_kms = f"arn:aws:kms:{self.region_name}:123456789012:key/cmk-hardening-live"
         audit_s3_key = f"audits/{instance_id}_{int(time.time())}.json"
 
-        plan_lower = str(plan_name).lower()
-        is_plan_b = "plan b" in plan_lower or "fast network" in plan_lower
-        is_plan_c = "plan c" in plan_lower or "regulatory" in plan_lower
-
         logs = [
-            f"[AWS Live Service] Authenticating with AWS region '{self.region_name}'..."
-        ]
-
-        if not is_plan_b:
-            logs.append(f"[AWS KMS] Invoking kms:CreateKey (KeySpec=SYMMETRIC_DEFAULT, AES-256 CMK)...")
-            logs.append(f"[AWS KMS] Active KMS Key ARN: {generated_kms}")
-
-        if not is_plan_c:
-            logs.append(f"[AWS VPC] Modifying Security Group: revoking 0.0.0.0/0 on administrative/DB ports...")
-            logs.append(f"[AWS VPC] Authorizing private VPC CIDR 10.0.0.0/16 ingress...")
-
-        if not (is_plan_b or is_plan_c):
-            logs.append(f"[AWS IAM] Attaching scoped instance profile 'CloudSentinelScopedMigrationRole'...")
-
-        logs.extend([
+            f"[AWS Live Service] Authenticating with AWS region '{self.region_name}'...",
+            f"[AWS KMS] Invoking kms:CreateKey (KeySpec=SYMMETRIC_DEFAULT, AES-256 CMK)...",
+            f"[AWS KMS] Active KMS Key ARN: {generated_kms}",
+            f"[AWS VPC] Modifying Security Group: revoking 0.0.0.0/0 on ports 22 & 3389...",
+            f"[AWS VPC] Authorizing private VPC CIDR 10.0.0.0/16 ingress...",
+            f"[AWS IAM] Attaching scoped instance profile 'CloudSentinelScopedMigrationRole'...",
             f"[AWS EC2] Baking Golden AMI from snapshot via ec2:CreateImage: {generated_ami}...",
             f"[Amazon S3] Encrypting & writing compliance manifest to s3://cloudsentinel-vault/{audit_s3_key}...",
             f"[Amazon DynamoDB] Recording migration state in table 'CloudSentinelMigrationState'...",
             f"[Amazon CloudWatch] Registering high CPU and disk I/O alarm thresholds..."
-        ])
+        ]
 
         return {
             "status": "COMPLETED",

@@ -10,12 +10,9 @@ class IaCGenerator:
 
     @staticmethod
     def generate_terraform(hardened_payload: Dict[str, Any], framework_name: str) -> str:
-        if not isinstance(hardened_payload, dict):
-            hardened_payload = {}
         ami_id = hardened_payload.get("ami_id", "ami-cloudsentinel-golden")
         instance_type = hardened_payload.get("instance_type", "t3.medium")
-        storage = hardened_payload.get("storage") or {}
-        kms_arn = storage.get("kms_key_id") or "aws_kms_key.cloudsentinel_cmk.arn"
+        kms_arn = hardened_payload.get("storage", {}).get("kms_key_id") or "aws_kms_key.cloudsentinel_cmk.arn"
 
         tf_template = f"""# ==============================================================================
 # CloudSentinel AI — Automated Zero-Trust Infrastructure as Code (Terraform)
@@ -172,18 +169,6 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "s3_kms_enc" {{
   }}
 }}
 
-resource "aws_s3_bucket_public_access_block" "audit_vault_pab" {{
-  bucket = aws_s3_bucket.audit_vault.id
-
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}}
-
-# ------------------------------------------------------------------------------
-# 6. Amazon DynamoDB: Workload Migration State & Consensus Store
-# ------------------------------------------------------------------------------
 resource "aws_dynamodb_table" "migration_blackboard" {{
   name         = "CloudSentinelMigrationState"
   billing_mode = "PAY_PER_REQUEST"

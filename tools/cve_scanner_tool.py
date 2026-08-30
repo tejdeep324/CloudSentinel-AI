@@ -35,10 +35,8 @@ class CVEScannerTool:
     @classmethod
     def scan_workload_packages(cls, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Scans workload OS and installed packages for active CVEs."""
-        if not isinstance(payload, dict):
-            payload = {}
         findings = []
-        os_sec = payload.get("os_security", {}) or {}
+        os_sec = payload.get("os_security", {})
         
         # If OS is not hardened, simulate presence of legacy vulnerable libraries
         if not os_sec.get("cis_benchmark_compliant", False):

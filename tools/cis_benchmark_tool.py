@@ -25,9 +25,6 @@ class CISBenchmarkTool:
         if os_security.get("password_auth_enabled", False):
             violations.append("CIS 5.2.11: Password-based authentication is enabled (Require SSH keys)")
 
-        if os_security.get("cis_benchmark_compliant") is False and not violations:
-            violations.append("CIS Baseline Breach: Workload OS has not completed CIS Level 1 hardening")
-
         return {
             "compliant": len(violations) == 0,
             "violations": violations,
