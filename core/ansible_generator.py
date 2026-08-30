@@ -10,6 +10,8 @@ class AnsiblePlaybookGenerator:
 
     @staticmethod
     def generate_playbook(hardened_payload: Dict[str, Any], framework_name: str) -> str:
+        if not isinstance(hardened_payload, dict):
+            hardened_payload = {}
         ami_id = hardened_payload.get("ami_id", "ami-cloudsentinel-golden")
         
         playbook_yaml = f"""# ==============================================================================

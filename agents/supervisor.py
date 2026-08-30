@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from agents.base_agent import BaseAgent
 from agents.state import AgentBlackboard, RemediationPlan
 from agents.specialized_agents import SecurityAgent, NetworkAgent, IAMAgent, ComplianceAgent
-from core.scoring import calculate_risk_score
+from core.scoring import calculate_risk_score, unwrap_payload
 
 class SupervisorAgent(BaseAgent):
     """Lead orchestrator: coordinates domain agents concurrently, aggregates state, and structures remediation strategies."""
@@ -34,6 +34,8 @@ class SupervisorAgent(BaseAgent):
         target_compliance: str = "PCI-DSS (Payment Card Security)"
     ) -> AgentBlackboard:
         """Executes concurrent multi-agent evaluation pipeline."""
+        workload_payload = unwrap_payload(workload_payload)
+
         blackboard = AgentBlackboard(
             workload_payload=workload_payload,
             target_compliance=target_compliance
@@ -49,9 +51,13 @@ class SupervisorAgent(BaseAgent):
         # 2. Parallel Dispatch of Infrastructure Domain Agents
         infrastructure_agents = [self.security_agent, self.network_agent, self.iam_agent]
         with ThreadPoolExecutor(max_workers=len(infrastructure_agents)) as executor:
-            futures = [executor.submit(agent.evaluate, blackboard) for agent in infrastructure_agents]
-            for future in futures:
-                future.result()
+            future_to_agent = {executor.submit(agent.evaluate, blackboard): agent for agent in infrastructure_agents}
+            for future in future_to_agent:
+                try:
+                    future.result(timeout=25.0)
+                except Exception as e:
+                    agent_obj = future_to_agent[future]
+                    blackboard.log_trace(self.name, f"Warning: Agent {agent_obj.name} evaluation timed out or failed: {str(e)}")
 
         # 3. Compliance Framework Mapping
         self.compliance_agent.evaluate(blackboard)

@@ -18,7 +18,7 @@ class AuditDatabaseService:
         
         # If in-memory, maintain a single persistent connection across operations
         if self._is_in_memory:
-            self._persistent_conn = sqlite3.connect(":memory:")
+            self._persistent_conn = sqlite3.connect(":memory:", timeout=30.0, check_same_thread=False)
             self._persistent_conn.row_factory = sqlite3.Row
             
         self._initialize_database()
@@ -26,7 +26,7 @@ class AuditDatabaseService:
     def _get_connection(self) -> sqlite3.Connection:
         if self._is_in_memory and self._persistent_conn is not None:
             return self._persistent_conn
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -38,10 +38,16 @@ class AuditDatabaseService:
                 pass
 
     def _initialize_database(self) -> None:
-        """Initializes SQLite schema for immutable migration records."""
+        """Initializes SQLite schema with Write-Ahead Logging (WAL) for high concurrency."""
         conn = self._get_connection()
         try:
             with conn:
+                if not self._is_in_memory:
+                    try:
+                        conn.execute("PRAGMA journal_mode=WAL;")
+                        conn.execute("PRAGMA busy_timeout=10000;")
+                    except Exception:
+                        pass
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS migration_audits (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,6 +78,7 @@ class AuditDatabaseService:
         try:
             with conn:
                 cursor = conn.cursor()
+                manifest_dict = manifest if isinstance(manifest, dict) else {}
                 cursor.execute("""
                     INSERT INTO migration_audits (
                         timestamp,
@@ -90,8 +97,8 @@ class AuditDatabaseService:
                     post_score,
                     compliance,
                     status,
-                    manifest.get("ami_id", "UNKNOWN"),
-                    json.dumps(manifest)
+                    manifest_dict.get("ami_id", "UNKNOWN"),
+                    json.dumps(manifest_dict)
                 ))
                 return int(cursor.lastrowid)
         finally:

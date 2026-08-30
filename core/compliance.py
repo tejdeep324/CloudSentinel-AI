@@ -39,13 +39,27 @@ def evaluate_compliance(payload: Dict[str, Any], standard_name: str) -> Dict[str
 
     passed: List[str] = []
     failed: List[str] = []
+    
+    std_lower = standard_name.lower()
+    if "pci" in std_lower:
+        storage_cite = "PCI-DSS Req 3.4"
+        network_cite = "PCI-DSS Req 1.3"
+        iam_cite = "PCI-DSS Req 8.2"
+    elif "hipaa" in std_lower:
+        storage_cite = "HIPAA 45 CFR § 164.312(a)(2)(iv)"
+        network_cite = "HIPAA 45 CFR § 164.312(e)(1)"
+        iam_cite = "HIPAA 45 CFR § 164.312(a)(1)"
+    else:  # SOC 2 default
+        storage_cite = "SOC2 CC6.6 (KMS Protection)"
+        network_cite = "SOC2 CC6.1 (Perimeter Boundary)"
+        iam_cite = "SOC2 CC6.3 (RBAC & Least Privilege)"
 
     # 1. Storage Encryption Audit
     storage = payload.get("storage") or {}
     if storage.get("encrypted", False) and storage.get("kms_key_id"):
-        passed.append("Storage Encryption: Compliant with KMS CMK encryption policy.")
+        passed.append(f"Storage Encryption ({storage_cite}): Compliant with KMS CMK encryption policy.")
     else:
-        failed.append("Storage Encryption: Non-compliant (Missing disk encryption or KMS CMK key).")
+        failed.append(f"Storage Encryption ({storage_cite}): Non-compliant (Missing disk encryption or KMS CMK key).")
 
     # 2. Network Perimeter Audit
     net = payload.get("network") or {}
@@ -56,9 +70,9 @@ def evaluate_compliance(payload: Dict[str, Any], standard_name: str) -> Dict[str
     )
     
     if not open_public:
-        passed.append("Network Ingress: Compliant (No administrative ports exposed to 0.0.0.0/0).")
+        passed.append(f"Network Ingress ({network_cite}): Compliant (No administrative ports exposed to 0.0.0.0/0).")
     else:
-        failed.append("Network Ingress: Non-compliant (Management/DB ports exposed to public internet).")
+        failed.append(f"Network Ingress ({network_cite}): Non-compliant (Management/DB ports exposed to public internet).")
 
     # 3. Access Governance Audit
     iam = payload.get("iam") or {}
@@ -66,24 +80,13 @@ def evaluate_compliance(payload: Dict[str, Any], standard_name: str) -> Dict[str
     is_admin = any(wildcard in role for wildcard in ["fullaccess", "admin", "administrator", "root", "*"])
 
     if iam.get("least_privilege_compliant", True) and not is_admin:
-        passed.append("Access Governance: Compliant with Principle of Least Privilege.")
+        passed.append(f"Access Governance ({iam_cite}): Compliant with Principle of Least Privilege.")
     else:
-        failed.append("Access Governance: Non-compliant (Over-privileged instance profile assigned).")
+        failed.append(f"Access Governance ({iam_cite}): Non-compliant (Over-privileged instance profile assigned).")
 
     return {
         "standard": standard_name,
         "status": "NON_COMPLIANT" if len(failed) > 0 else "COMPLIANT",
         "passed": passed,
         "failed": failed
-    }
-
-def calculate_cost_optimization(instance_type: str = "m5.large") -> Dict[str, Any]:
-    """Calculates compute right-sizing savings."""
-    return {
-        "current_instance": instance_type,
-        "recommended_instance": "t3.medium",
-        "current_monthly_cost": 70.08,
-        "optimized_monthly_cost": 30.36,
-        "monthly_savings": 39.72,
-        "percentage_savings": 56.7
     }
