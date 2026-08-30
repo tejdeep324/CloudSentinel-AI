@@ -191,7 +191,7 @@ if st.session_state.page_view == "STAGE_INGESTION":
         "⚡ Scenario Presets",
         "☁️ Live AWS Account Ingestion (EC2 SDK)",
         "📝 Interactive Form Builder",
-        "📁 JSON Webhook Upload",
+        "📁 JSON Webhook Upload & Extractor Guide",
         "🤖 Multi-Agent Directory & Guide"
     ])
 
@@ -264,16 +264,147 @@ if st.session_state.page_view == "STAGE_INGESTION":
             }
             st.success("Custom workload staged successfully.")
 
-    # Channel 4: JSON Upload
+    # Channel 4: JSON Upload & Extractor Guide (Method 1 & Method 2)
     with ingest_tab4:
-        st.caption("Upload raw JSON telemetry exported by AWS MGN / Discovery Service:")
-        uploaded = st.file_uploader("Upload telemetry JSON", type=["json"])
+        st.markdown("#### 📁 Upload Workload Telemetry JSON")
+        uploaded = st.file_uploader("Upload pre-generated workload telemetry (.json)", type=["json"])
         if uploaded is not None:
             try:
                 workload_payload = json.load(uploaded)
-                st.success("JSON ingested successfully.")
-            except Exception:
-                st.error("Invalid JSON file.")
+                st.success("JSON telemetry uploaded and staged successfully.")
+            except Exception as e:
+                st.error(f"Invalid JSON file: {str(e)}")
+
+        st.markdown("---")
+        st.markdown("### 🛠️ How to Generate This JSON from Your AWS Account")
+        
+        json_method1, json_method2 = st.tabs([
+            "🐍 Method 1: Automated Python Extractor Script",
+            "📋 Method 2: Manual AWS Console Mapping & Template"
+        ])
+        
+        with json_method1:
+            st.caption("Run this Python script on your local machine to automatically query AWS APIs via boto3 and export the JSON:")
+            
+            extractor_script = """import json
+import boto3
+
+# 1. Provide your EC2 instance ID and AWS Region
+INSTANCE_ID = "i-089a7f51b919e34e2"  # <-- Replace with your Instance ID
+REGION = "us-east-1"                 # <-- Replace with your AWS Region
+
+ec2 = boto3.client("ec2", region_name=REGION)
+
+# 2. Fetch Instance metadata
+resp = ec2.describe_instances(InstanceIds=[INSTANCE_ID])
+instance = resp["Reservations"][0]["Instances"][0]
+
+# Volume encryption check
+vol_id = instance["BlockDeviceMappings"][0]["Ebs"]["VolumeId"] if instance.get("BlockDeviceMappings") else "vol-none"
+vol_info = ec2.describe_volumes(VolumeIds=[vol_id])["Volumes"][0] if vol_id != "vol-none" else {}
+
+# Security group ingress check
+sg_id = instance["SecurityGroups"][0]["GroupId"] if instance.get("SecurityGroups") else None
+sg_rules = []
+if sg_id:
+    sg_info = ec2.describe_security_groups(GroupIds=[sg_id])["SecurityGroups"][0]
+    for perm in sg_info.get("IpPermissions", []):
+        port = perm.get("FromPort", 0)
+        proto = perm.get("IpProtocol", "tcp")
+        for ip in perm.get("IpRanges", []):
+            sg_rules.append({"port": port, "protocol": proto, "source": ip.get("CidrIp", "")})
+
+# IAM Role check
+iam_arn = instance.get("IamInstanceProfile", {}).get("Arn", "None")
+role_name = iam_arn.split("/")[-1] if "arn" in iam_arn else "None"
+
+# 3. Assemble CloudSentinel Standard Schema
+telemetry = {
+    "instance_id": INSTANCE_ID,
+    "instance_type": instance.get("InstanceType", "t3.medium"),
+    "storage": {
+        "volume_id": vol_id,
+        "encrypted": vol_info.get("Encrypted", False),
+        "kms_key_id": vol_info.get("KmsKeyId", None)
+    },
+    "network": {
+        "public_ip_assigned": bool(instance.get("PublicIpAddress")),
+        "security_group_rules": sg_rules
+    },
+    "iam": {
+        "attached_role": role_name,
+        "least_privilege_compliant": "admin" not in role_name.lower() and role_name != "None"
+    },
+    "os_security": {
+        "root_login_enabled": True,
+        "password_auth_enabled": True,
+        "cis_benchmark_compliant": False
+    },
+    "packages": [
+        {"name": "openssh-server", "version": "8.2p1"},
+        {"name": "libssl1.1", "version": "1.1.1f"}
+    ]
+}
+
+# 4. Save to JSON
+with open("workload_telemetry.json", "w") as f:
+    json.dump(telemetry, f, indent=2)
+
+print("Generated workload_telemetry.json successfully!")
+"""
+            st.code(extractor_script, language="python")
+            st.download_button(
+                "📥 Download extract_telemetry.py",
+                data=extractor_script,
+                file_name="extract_telemetry.py",
+                mime="text/x-python",
+                type="primary"
+            )
+
+        with json_method2:
+            st.caption("Copy this template into a text editor (e.g., Notepad / VS Code) and populate the values directly from your AWS Console:")
+            
+            sample_json_template = {
+                "instance_id": "i-0a8f9214b7e1234a5",
+                "instance_type": "m5.large",
+                "storage": {
+                    "volume_id": "vol-0192837465abcde12",
+                    "encrypted": False,
+                    "kms_key_id": None
+                },
+                "network": {
+                    "public_ip_assigned": True,
+                    "security_group_rules": [
+                        {"port": 22, "protocol": "tcp", "source": "0.0.0.0/0"},
+                        {"port": 3389, "protocol": "tcp", "source": "0.0.0.0/0"}
+                    ]
+                },
+                "iam": {
+                    "attached_role": "AdministratorAccess",
+                    "least_privilege_compliant": False
+                },
+                "os_security": {
+                    "root_login_enabled": True,
+                    "password_auth_enabled": True,
+                    "cis_benchmark_compliant": False
+                }
+            }
+            
+            st.code(json.dumps(sample_json_template, indent=2), language="json")
+            st.download_button(
+                "📥 Download workload_template.json",
+                data=json.dumps(sample_json_template, indent=2),
+                file_name="workload_template.json",
+                mime="application/json"
+            )
+
+            with st.expander("🔍 AWS Console Navigation Guide (Where to Find Each Field)"):
+                st.markdown("""
+                * **`instance_id` & `instance_type`:** Open **EC2 Console** $\\rightarrow$ Click **Instances** $\\rightarrow$ Select your instance $\\rightarrow$ Copy from the **Details** tab.
+                * **`storage` (Volume & Encryption):** In instance details, open the **Storage** tab $\\rightarrow$ Click the **Volume ID** $\\rightarrow$ Check whether **Encryption** states *Encrypted* or *Not Encrypted*.
+                * **`network` & `security_group_rules`:** In instance details, open the **Security** tab $\\rightarrow$ Click the **Security Group ID** $\\rightarrow$ Check the **Inbound Rules** table for exposed ports (`22`, `3389`, `3306`) and source CIDRs (`0.0.0.0/0`).
+                * **`iam`:** In instance details, open the **Security** tab $\\rightarrow$ Check the **IAM Role** name.
+                """)
 
     # Channel 5: Multi-Agent Directory Tab
     with ingest_tab5:
