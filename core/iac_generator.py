@@ -6,7 +6,7 @@ from typing import Dict, Any
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 class IaCGenerator:
-    """Generates enterprise-grade, CIS/PCI-compliant Terraform IaC definitions covering all 10 AWS services."""
+    """Generates enterprise-grade, CIS/PCI-compliant Terraform definitions across all architecture components."""
 
     @staticmethod
     def generate_terraform(hardened_payload: Dict[str, Any], framework_name: str) -> str:
@@ -141,7 +141,7 @@ resource "aws_instance" "production_workload" {{
     volume_type = "gp3"
     volume_size = 50
     encrypted   = true
-    kms_key_id  = {kms_arn if kms_arn.startswith('aws_') else f'"{kms_arn}"'}
+    kms_key_id  = {kms_arn if str(kms_arn).startswith('aws_') else f'"{kms_arn}"'}
   }}
 
   metadata_options {{
@@ -152,7 +152,7 @@ resource "aws_instance" "production_workload" {{
 }}
 
 # ------------------------------------------------------------------------------
-# 5. Amazon S3: Immutable Compliance Audit Vault
+# 5. Amazon S3 & DynamoDB: Audit Storage & Migration State Blackboard
 # ------------------------------------------------------------------------------
 resource "aws_s3_bucket" "audit_vault" {{
   bucket_prefix = "cloudsentinel-audit-vault-"
@@ -169,9 +169,6 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "s3_kms_enc" {{
   }}
 }}
 
-# ------------------------------------------------------------------------------
-# 6. Amazon DynamoDB: Workload Migration State & Consensus Store
-# ------------------------------------------------------------------------------
 resource "aws_dynamodb_table" "migration_blackboard" {{
   name         = "CloudSentinelMigrationState"
   billing_mode = "PAY_PER_REQUEST"
@@ -194,7 +191,7 @@ resource "aws_dynamodb_table" "migration_blackboard" {{
 }}
 
 # ------------------------------------------------------------------------------
-# 7. AWS WAF: Web Application Firewall ACL
+# 6. AWS WAF: Web Application Firewall ACL
 # ------------------------------------------------------------------------------
 resource "aws_wafv2_web_acl" "waf_protection" {{
   name        = "cloudsentinel-waf-ruleset"
@@ -213,7 +210,7 @@ resource "aws_wafv2_web_acl" "waf_protection" {{
 }}
 
 # ------------------------------------------------------------------------------
-# 8. Amazon CloudWatch: Real-time Metric Alarms & Telemetry Logs
+# 7. Amazon CloudWatch: Real-time Metric Alarms & Telemetry Logs
 # ------------------------------------------------------------------------------
 resource "aws_cloudwatch_metric_alarm" "cpu_utilization_alarm" {{
   alarm_name          = "cloudsentinel-cpu-high"
@@ -228,7 +225,7 @@ resource "aws_cloudwatch_metric_alarm" "cpu_utilization_alarm" {{
 }}
 
 # ------------------------------------------------------------------------------
-# 9. AWS Config: Continuous CIS & PCI Compliance Evaluator
+# 8. AWS Config: Continuous CIS & PCI Compliance Evaluator
 # ------------------------------------------------------------------------------
 resource "aws_config_config_rule" "encrypted_volumes_rule" {{
   name = "encrypted-volumes-check"
@@ -237,6 +234,57 @@ resource "aws_config_config_rule" "encrypted_volumes_rule" {{
     owner             = "AWS"
     source_identifier = "ENCRYPTED_VOLUMES"
   }}
+}}
+
+# ------------------------------------------------------------------------------
+# 9. Amazon SQS & SNS: Asynchronous Quarantine Queue & Alert Notifications
+# ------------------------------------------------------------------------------
+resource "aws_sqs_queue" "migration_quarantine_queue" {{
+  name                      = "cloudsentinel-quarantine-queue"
+  message_retention_seconds = 86400
+  kms_master_key_id         = aws_kms_key.cloudsentinel_cmk.id
+}}
+
+resource "aws_sns_topic" "migration_security_alerts" {{
+  name              = "cloudsentinel-security-alerts-topic"
+  kms_master_key_id = aws_kms_key.cloudsentinel_cmk.id
+}}
+
+# ------------------------------------------------------------------------------
+# 10. AWS Step Functions: Autonomous Multi-Agent Consensus State Machine
+# ------------------------------------------------------------------------------
+resource "aws_sfn_state_machine" "migration_state_machine" {{
+  name     = "CloudSentinel-Autonomous-Migration-StateMachine"
+  role_arn = aws_iam_role.scoped_migration_role.arn
+
+  definition = <<EOF
+{{
+  "Comment": "CloudSentinel AI Multi-Agent Consensus Pipeline",
+  "StartAt": "QuarantineAudit",
+  "States": {{
+    "QuarantineAudit": {{
+      "Type": "Pass",
+      "Result": "AUDIT_COMPLETE",
+      "Next": "VerifyPosture"
+    }},
+    "VerifyPosture": {{
+      "Type": "Pass",
+      "End": true
+    }}
+  }}
+}}
+EOF
+}}
+
+# ------------------------------------------------------------------------------
+# 11. AWS Database Migration Service (DMS): Encrypted Database Replication
+# ------------------------------------------------------------------------------
+resource "aws_dms_replication_instance" "dms_instance" {{
+  replication_instance_id    = "cloudsentinel-dms-instance"
+  replication_instance_class = "dms.t3.medium"
+  allocated_storage          = 20
+  kms_key_arn                = aws_kms_key.cloudsentinel_cmk.arn
+  vpc_security_group_ids     = [aws_security_group.hardened_sg.id]
 }}
 """
         return tf_template
