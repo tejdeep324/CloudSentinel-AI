@@ -21,6 +21,7 @@ from core.report_generator import ComplianceReportGenerator
 from core.iac_generator import IaCGenerator
 from core.ansible_generator import AnsiblePlaybookGenerator
 from core.recovery_manager import RecoverySnapshotManager
+from core.aws_live_service import AWSLiveService
 from tools.cost_calculator_tool import FinOpsCostCalculatorTool
 from tools.cve_scanner_tool import CVEScannerTool
 
@@ -108,14 +109,15 @@ def get_services():
     return (
         AuditDatabaseService(),
         SupervisorAgent(),
-        PipelineOrchestrator()
+        PipelineOrchestrator(),
+        AWSLiveService()
     )
 
-db_service, supervisor, orchestrator = get_services()
+db_service, supervisor, orchestrator, aws_service = get_services()
 
 # Session State Page Routing
 if "page_view" not in st.session_state:
-    st.session_state.page_view = "STAGE_INGESTION"  # Options: STAGE_INGESTION | MULTI_AGENT_AUDIT | REMEDIATION_RESULTS
+    st.session_state.page_view = "STAGE_INGESTION"
 if "pipeline_result" not in st.session_state:
     st.session_state.pipeline_result = None
 if "current_payload" not in st.session_state:
@@ -128,6 +130,14 @@ with st.sidebar:
     st.caption("Autonomous Workload Governance & AMI Hardening")
     st.markdown("---")
 
+    # AWS Connectivity Status Indicator
+    is_aws = aws_service.is_aws_authenticated()
+    if is_aws:
+        st.success("🟢 AWS Live SDK Connected")
+    else:
+        st.info("☁️ AWS Live Adapter (Simulated SDK)")
+
+    st.markdown("---")
     selected_compliance = st.selectbox(
         "🎯 Target Compliance Framework",
         list(COMPLIANCE_STANDARDS.keys())
@@ -152,16 +162,13 @@ if st.session_state.page_view == "STAGE_INGESTION":
 
     st.markdown("## 🛡️ Autonomous Migration Security Control Plane")
     
-    with st.expander("ℹ️ **About CloudSentinel AI — How It Works & Why It Exists**", expanded=False):
+    with st.expander("ℹ️ **About CloudSentinel AI & AWS Architecture**", expanded=False):
         st.markdown("""
-        **CloudSentinel AI** is an automated governance interceptor for cloud workload migrations. 
-        When legacy on-premise or cloud servers are migrated into AWS/Azure, they often carry severe security risks (unencrypted disks, open SSH/RDP ports, wildcard root IAM roles, outdated Linux packages).
-        
-        Instead of allowing unverified instances directly into production VPCs:
-        1. **Quarantine Interception:** CloudSentinel catches the server in an isolated staging subnet.
-        2. **Multi-Agent Consensus:** Specialized domain agents (Security, Network, IAM, Compliance, CVE) evaluate vulnerabilities concurrently.
-        3. **Automated Zero-Trust Hardening:** Applies KMS CMK disk encryption, locks security groups to VPC CIDRs, binds least-privilege IAM roles, applies CIS Level 1 OS scripts, and bakes a verified **Golden AMI**.
-        4. **Closed-Loop Verification:** Re-audits the baked AMI. If score $\ge 90/100$, it deploys to production; otherwise, it triggers a chaos rollback.
+        **CloudSentinel AI** integrates natively with **AWS Services**:
+        * **AWS EC2:** Programmatically intercepts quarantine VMs and bakes verified Golden AMIs.
+        * **AWS KMS:** Creates and binds Customer-Managed Keys (CMK) with AES-256 encryption.
+        * **AWS Security Groups / VPC:** Automatically replaces open `0.0.0.0/0` ingress rules with private CIDR masks.
+        * **AWS IAM:** Detects wildcard administrator roles and enforces least-privilege instance profiles.
         """)
 
     st.markdown("""
@@ -180,9 +187,9 @@ if st.session_state.page_view == "STAGE_INGESTION":
     
     ingest_tab1, ingest_tab2, ingest_tab3, ingest_tab4, ingest_tab5 = st.tabs([
         "⚡ Scenario Presets",
-        "📝 Interactive Form Builder (Method 1)",
-        "☁️ Live AWS Account API (Method 2)",
-        "📁 JSON Webhook Upload (Method 3)",
+        "☁️ Live AWS Account Ingestion (EC2 SDK)",
+        "📝 Interactive Form Builder",
+        "📁 JSON Webhook Upload",
         "🤖 Multi-Agent Directory & Guide"
     ])
 
@@ -209,8 +216,22 @@ if st.session_state.page_view == "STAGE_INGESTION":
             with open("data/sample_payload.json", "r") as f:
                 workload_payload = json.load(f)
 
-    # Channel 2: Form Builder
+    # Channel 2: Live AWS Boto3 Discovery
     with ingest_tab2:
+        st.caption("Discover live AWS EC2 instances, EBS volumes, and Security Groups via boto3 SDK:")
+        aws_c1, aws_c2 = st.columns(2)
+        with aws_c1:
+            aws_reg = st.selectbox("AWS Target Region", ["us-east-1", "us-west-2", "eu-west-1", "ap-south-1"])
+            aws_inst = st.text_input("Target AWS EC2 Instance ID", value="i-089a7f51b919e34e2")
+        with aws_c2:
+            st.text_input("Cross-Account IAM Role ARN", value="arn:aws:iam::123456789012:role/CloudSentinelDiscoveryRole")
+            if st.button("📡 Discover & Fetch Live AWS Telemetry", use_container_width=True):
+                with st.spinner("Connecting to AWS EC2 & Security Group APIs..."):
+                    workload_payload = aws_service.discover_live_ec2_instance(aws_inst)
+                    st.success(f"Ingested telemetry from {workload_payload.get('aws_source')}")
+
+    # Channel 3: Form Builder
+    with ingest_tab3:
         st.caption("Configure a migration workload manually:")
         form_col1, form_col2 = st.columns(2)
         with form_col1:
@@ -241,20 +262,6 @@ if st.session_state.page_view == "STAGE_INGESTION":
             }
             st.success("Custom workload staged successfully.")
 
-    # Channel 3: Live AWS API
-    with ingest_tab3:
-        st.caption("Pull live EC2 telemetry directly from AWS account via boto3 SDK:")
-        aws_c1, aws_c2 = st.columns(2)
-        with aws_c1:
-            st.text_input("AWS Region", value="us-east-1")
-            st.text_input("Target Instance ID", value="i-0987654321fedcba0")
-        with aws_c2:
-            st.text_input("Cross-Account Role ARN", value="arn:aws:iam::123456789012:role/MigrationDiscoveryRole")
-            if st.button("📡 Ingest Live AWS Workload"):
-                st.info("Authenticated with AWS STS. Ingested live configuration.")
-                with open("data/sample_payload.json", "r") as f:
-                    workload_payload = json.load(f)
-
     # Channel 4: JSON Upload
     with ingest_tab4:
         st.caption("Upload raw JSON telemetry exported by AWS MGN / Discovery Service:")
@@ -277,17 +284,17 @@ if st.session_state.page_view == "STAGE_INGESTION":
             <div class="agent-card">
                 <h4 style="color:#0284c7; margin:0 0 6px 0;">🧠 SupervisorAgent (Orchestration & Consensus)</h4>
                 <b>Target Problem:</b> Multi-domain conflict resolution and trade-off planning.<br>
-                <b>Capabilities:</b> Runs parallel sub-agent evaluations, aggregates finding severities, computes baseline scores, and formulates remediation strategies (Plan A, Plan B, Plan C).
+                <b>AWS Integration:</b> Dispatches domain agents, evaluates overall risk posture, and generates Golden AMI baking strategies.
             </div>
             <div class="agent-card">
                 <h4 style="color:#dc2626; margin:0 0 6px 0;">🔒 SecurityAgent (Storage & OS Hardening)</h4>
                 <b>Target Problem:</b> Plaintext disk storage and insecure OS configurations.<br>
-                <b>Capabilities:</b> Inspects AWS EBS volumes for KMS Customer-Managed Key (CMK) encryption, evaluates CIS Level 1 OS baselines, and flags direct SSH root access vulnerabilities.
+                <b>AWS Integration:</b> Inspects EBS volumes for <b>AWS KMS CMK</b> encryption and applies CIS Level 1 baselines.
             </div>
             <div class="agent-card">
                 <h4 style="color:#ea580c; margin:0 0 6px 0;">🌐 NetworkAgent (Perimeter & Ingress)</h4>
                 <b>Target Problem:</b> Public internet exposure of sensitive management & DB ports.<br>
-                <b>Capabilities:</b> Analyzes Security Group ingress rules, flagging any instances opening ports <code>22</code> (SSH), <code>3389</code> (RDP), <code>3306</code> (MySQL), or <code>5432</code> (Postgres) to <code>0.0.0.0/0</code>.
+                <b>AWS Integration:</b> Analyzes <b>AWS VPC Security Groups</b>, revoking <code>0.0.0.0/0</code> public access on ports 22/3389/3306.
             </div>
             """, unsafe_allow_html=True)
             
@@ -296,17 +303,17 @@ if st.session_state.page_view == "STAGE_INGESTION":
             <div class="agent-card">
                 <h4 style="color:#7c3aed; margin:0 0 6px 0;">🔑 IAMAgent (Access Governance & Least Privilege)</h4>
                 <b>Target Problem:</b> Over-privileged wildcard administrator roles on compute instances.<br>
-                <b>Capabilities:</b> Enforces the Principle of Least Privilege (PoLP) by intercepting instance profiles with <code>AdministratorAccess</code> or wildcard <code>*</code> actions.
+                <b>AWS Integration:</b> Inspects <b>AWS IAM Instance Profiles</b>, revoking <code>AdministratorAccess</code> and attaching scoped roles.
             </div>
             <div class="agent-card">
                 <h4 style="color:#16a34a; margin:0 0 6px 0;">📋 ComplianceAgent (Regulatory Framework Mapping)</h4>
                 <b>Target Problem:</b> Regulatory compliance failure under standard cloud frameworks.<br>
-                <b>Capabilities:</b> Maps technical telemetry violations directly to <b>PCI-DSS v4.0</b>, <b>HIPAA Security Rule</b>, and <b>SOC 2 Type II</b> audit clauses.
+                <b>AWS Integration:</b> Maps AWS configuration violations directly to <b>PCI-DSS v4.0</b>, <b>HIPAA</b>, and <b>SOC 2</b>.
             </div>
             <div class="agent-card">
                 <h4 style="color:#0f766e; margin:0 0 6px 0;">🔍 CVEScannerTool (Package Vulnerability Hunter)</h4>
                 <b>Target Problem:</b> Unpatched OS vulnerabilities and known software exploits.<br>
-                <b>Capabilities:</b> Correlates installed OS binaries against NVD vulnerability databases (e.g., Log4Shell, OpenSSL CVEs) with CVSS v3.1 severity scores.
+                <b>AWS Integration:</b> Scans Linux packages on AWS EC2 instances against NVD vulnerability databases.
             </div>
             """, unsafe_allow_html=True)
 
@@ -434,10 +441,15 @@ elif st.session_state.page_view == "MULTI_AGENT_AUDIT":
         st.caption(f"⚡ **Details:** {plan_obj.description}")
 
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔧 Execute Hardening & Build Golden AMI", type="primary", use_container_width=True):
-            with st.spinner("Executing Zero-Trust hardening, patching CVEs, and building Golden AMI..."):
+        if st.button("🔧 Execute Hardening & Build Golden AMI (AWS SDK)", type="primary", use_container_width=True):
+            with st.spinner("Invoking AWS KMS, modifying Security Groups, and baking Golden AMI via AWS SDK..."):
                 res = orchestrator.run_full_pipeline(payload, selected_plan, force_failure=simulate_fail)
                 res["selected_plan_name"] = selected_plan
+                
+                # Run live AWS hardening hooks
+                aws_exec_res = aws_service.execute_live_hardening(payload, selected_plan)
+                res["logs"].extend(aws_exec_res["logs"])
+                
                 st.session_state.pipeline_result = res
                 
                 db_service.record_migration_event(
@@ -540,7 +552,7 @@ elif st.session_state.page_view == "REMEDIATION_RESULTS":
         delta_data = HardeningEngine.compute_delta(payload, res["hardened_payload"])
         st.dataframe(pd.DataFrame(delta_data), use_container_width=True, hide_index=True)
 
-        with st.expander("🖥️ Real-Time Autonomous Execution Logs", expanded=False):
+        with st.expander("🖥️ Real-Time AWS SDK & Autonomous Execution Logs", expanded=False):
             st.code("\n".join(res["logs"]), language="bash")
 
         st.markdown("#### 📥 Compliance & Security Audit Downloads")
