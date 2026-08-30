@@ -32,14 +32,18 @@ class ComplianceReportGenerator:
         writer.writerow(["Post-Hardening Score", result_data.get("post_score", "N/A")])
         writer.writerow(["Deployment Status", result_data.get("deployment_status", "N/A")])
         writer.writerow([])
-        writer.writerow(["Security Domain", "Quarantined State", "Hardened Golden State"])
+        writer.writerow(["Security Domain", "Pre-Remediation State (Quarantine)", "Post-Remediation State (Golden AMI)", "Compliance Impact"])
 
         delta_records = result_data.get("delta", [])
         for rec in delta_records:
+            pre = rec.get("Pre-Remediation State (Quarantine)") or rec.get("Quarantined State", "")
+            post = rec.get("Post-Remediation State (Golden AMI)") or rec.get("Hardened Golden State", "")
+            impact = rec.get("Compliance Impact", "REMEDIATED")
             writer.writerow([
                 rec.get("Security Domain", ""),
-                rec.get("Quarantined State", ""),
-                rec.get("Hardened Golden State", "")
+                pre,
+                post,
+                impact
             ])
 
         return output.getvalue()

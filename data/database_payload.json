@@ -5,11 +5,10 @@
   "network": {
     "vpc_id": "vpc-migration-db",
     "subnet_id": "subnet-db-stage",
-    "open_ports": [3306, 22],
+    "open_ports": [3306],
     "public_ip_assigned": true,
     "security_group_rules": [
-      { "port": 3306, "source": "0.0.0.0/0", "protocol": "tcp", "status": "EXPOSED" },
-      { "port": 22, "source": "0.0.0.0/0", "protocol": "tcp", "status": "EXPOSED" }
+      { "port": 3306, "source": "0.0.0.0/0", "protocol": "tcp", "status": "EXPOSED" }
     ]
   },
   "storage": {
@@ -18,11 +17,11 @@
     "kms_key_id": null
   },
   "iam": {
-    "attached_role": "RDSAndEC2FullAccess",
+    "attached_role": "RDSAccessRole",
     "least_privilege_compliant": false
   },
   "os_security": {
-    "root_login_enabled": true,
+    "root_login_enabled": false,
     "password_auth_enabled": true,
     "cis_benchmark_compliant": false
   }

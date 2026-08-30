@@ -11,8 +11,10 @@ class RecoverySnapshotManager:
 
     @staticmethod
     def generate_dr_runbook(payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            payload = {}
         instance_id = payload.get("instance_id", "i-quarantine-node")
-        volume_id = payload.get("storage", {}).get("volume_id", "vol-quarantine-01")
+        volume_id = (payload.get("storage") or {}).get("volume_id", "vol-quarantine-01")
         snapshot_id = f"snap-quarantine-backup-{int(time.time())}"
 
         runbook_sh = f"""#!/usr/bin/env bash
@@ -34,8 +36,11 @@ echo "[!] Reverting instance to original quarantine snapshot..."
 aws ec2 stop-instances --instance-ids {instance_id}
 aws ec2 wait instance-stopped --instance-ids {instance_id}
 aws ec2 detach-volume --volume-id {volume_id}
-aws ec2 create-volume --snapshot-id {snapshot_id} --availability-zone us-east-1a --tag-specifications 'ResourceType=volume,Tags=[{{Key=Name,Value=RestoredVolume}}]'
-echo "[+] Instance reverted to quarantine baseline."
+RESTORED_VOL_ID=$(aws ec2 create-volume --snapshot-id {snapshot_id} --availability-zone us-east-1a --tag-specifications 'ResourceType=volume,Tags=[{{Key=Name,Value=RestoredVolume}}]' --query 'VolumeId' --output text)
+aws ec2 wait volume-available --volume-ids $RESTORED_VOL_ID
+aws ec2 attach-volume --volume-id $RESTORED_VOL_ID --instance-id {instance_id} --device /dev/sda1
+aws ec2 start-instances --instance-ids {instance_id}
+echo "[+] Instance {instance_id} restored to snapshot {snapshot_id} and restarted."
 EOF
 chmod +x rollback_workload.sh
 """

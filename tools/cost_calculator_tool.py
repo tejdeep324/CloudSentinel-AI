@@ -41,15 +41,19 @@ class FinOpsCostCalculatorTool:
             recommended_instance = "t3.xlarge"
         elif "xlarge" in current_instance:
             recommended_instance = "t3.large"
-        else:
+        elif "large" in current_instance:
             recommended_instance = "t3.medium"
+        elif current_instance == "t3.medium":
+            recommended_instance = "t3.micro"
+        else:
+            recommended_instance = current_instance
 
-        optimized_cost = cls.PRICING_TABLE.get(recommended_instance, 30.36)
-        optimized_co2 = cls.CARBON_FOOTPRINT_TABLE.get(recommended_instance, 3.8)
+        optimized_cost = cls.PRICING_TABLE.get(recommended_instance, current_cost)
+        optimized_co2 = cls.CARBON_FOOTPRINT_TABLE.get(recommended_instance, current_co2)
 
-        monthly_savings = round(current_cost - optimized_cost, 2)
-        percentage_savings = round((monthly_savings / current_cost) * 100, 1)
-        co2_reduction_kg = round(current_co2 - optimized_co2, 1)
+        monthly_savings = max(0.0, round(current_cost - optimized_cost, 2))
+        percentage_savings = round((monthly_savings / current_cost) * 100, 1) if current_cost > 0 else 0.0
+        co2_reduction_kg = max(0.0, round(current_co2 - optimized_co2, 1))
 
         return {
             "current_instance": current_instance,
