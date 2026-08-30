@@ -12,7 +12,7 @@ load_dotenv()
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 from agents.supervisor import SupervisorAgent
-from core.scoring import calculate_risk_score
+from core.scoring import calculate_risk_score, unwrap_payload
 from core.compliance import evaluate_compliance, COMPLIANCE_STANDARDS
 from core.hardening import HardeningEngine
 from core.pipeline_orchestrator import PipelineOrchestrator
@@ -26,6 +26,44 @@ from core.orchestration_service import AWSOrchestrationService
 from core.packer_generator import PackerImageBuilderGenerator
 from tools.cost_calculator_tool import FinOpsCostCalculatorTool
 from tools.cve_scanner_tool import CVEScannerTool
+
+# ----------------- ALL AWS REGIONS LIST -----------------
+AWS_REGIONS = [
+    # US & Canada
+    "us-east-1 (N. Virginia)",
+    "us-east-2 (Ohio)",
+    "us-west-1 (N. California)",
+    "us-west-2 (Oregon)",
+    "ca-central-1 (Central Canada)",
+    "ca-west-1 (Calgary)",
+    # Europe
+    "eu-west-1 (Ireland)",
+    "eu-west-2 (London)",
+    "eu-west-3 (Paris)",
+    "eu-central-1 (Frankfurt)",
+    "eu-central-2 (Zurich)",
+    "eu-north-1 (Stockholm)",
+    "eu-south-1 (Milan)",
+    "eu-south-2 (Spain)",
+    # Asia Pacific
+    "ap-south-1 (Mumbai)",
+    "ap-south-2 (Hyderabad)",
+    "ap-southeast-1 (Singapore)",
+    "ap-southeast-2 (Sydney)",
+    "ap-southeast-3 (Jakarta)",
+    "ap-southeast-4 (Melbourne)",
+    "ap-northeast-1 (Tokyo)",
+    "ap-northeast-2 (Seoul)",
+    "ap-northeast-3 (Osaka)",
+    "ap-east-1 (Hong Kong)",
+    # Middle East & Africa
+    "me-south-1 (Bahrain)",
+    "me-central-1 (UAE)",
+    "il-central-1 (Tel Aviv)",
+    "af-south-1 (Cape Town)",
+    # South America
+    "sa-east-1 (São Paulo)"
+]
 
 # ----------------- PAGE CONFIG -----------------
 st.set_page_config(
@@ -218,17 +256,19 @@ if st.session_state.page_view == "STAGE_INGESTION":
             with open("data/sample_payload.json", "r") as f:
                 workload_payload = json.load(f)
 
-    # Channel 2: Live AWS Boto3 Discovery
+    # Channel 2: Live AWS Boto3 Discovery (With All Target Regions)
     with ingest_tab2:
         st.caption("Discover live AWS EC2 instances, EBS volumes, and Security Groups via boto3 SDK:")
         aws_c1, aws_c2 = st.columns(2)
         with aws_c1:
-            aws_reg = st.selectbox("AWS Target Region", ["us-east-1", "us-west-2", "eu-west-1", "ap-south-1"])
+            selected_region_raw = st.selectbox("AWS Target Region", AWS_REGIONS, index=0)
+            selected_region_code = selected_region_raw.split(" ")[0]
             aws_inst = st.text_input("Target AWS EC2 Instance ID", value="i-089a7f51b919e34e2")
         with aws_c2:
             st.text_input("Cross-Account IAM Role ARN", value="arn:aws:iam::123456789012:role/CloudSentinelDiscoveryRole")
             if st.button("📡 Discover & Fetch Live AWS Telemetry", use_container_width=True):
-                with st.spinner("Connecting to AWS EC2 & Security Group APIs..."):
+                with st.spinner(f"Connecting to AWS EC2 ({selected_region_code}) & Security Group APIs..."):
+                    aws_service.region_name = selected_region_code
                     workload_payload = aws_service.discover_live_ec2_instance(aws_inst)
                     st.success(f"Ingested telemetry from {workload_payload.get('aws_source')}")
 
@@ -264,14 +304,15 @@ if st.session_state.page_view == "STAGE_INGESTION":
             }
             st.success("Custom workload staged successfully.")
 
-    # Channel 4: JSON Upload & Extractor Guide (Method 1 & Method 2)
+    # Channel 4: JSON Upload & Extractor Guide (With Auto-Unwrapping)
     with ingest_tab4:
         st.markdown("#### 📁 Upload Workload Telemetry JSON")
         uploaded = st.file_uploader("Upload pre-generated workload telemetry (.json)", type=["json"])
         if uploaded is not None:
             try:
-                workload_payload = json.load(uploaded)
-                st.success("JSON telemetry uploaded and staged successfully.")
+                raw_json = json.load(uploaded)
+                workload_payload = unwrap_payload(raw_json)
+                st.success("JSON telemetry uploaded, verified, and staged successfully.")
             except Exception as e:
                 st.error(f"Invalid JSON file: {str(e)}")
 
@@ -495,7 +536,7 @@ elif st.session_state.page_view == "MULTI_AGENT_AUDIT":
         pre_eval = calculate_risk_score(payload)
         pre_score = pre_eval["total_score"]
 
-        gauge_pre_color = "#dc2626" if pre_score < 60 else "#d97706"
+        gauge_pre_color = "#dc2626" if pre_score < 60 else ("#d97706" if pre_score < 90 else "#16a34a")
         fig_pre = go.Figure(go.Indicator(
             mode="gauge+number",
             value=pre_score,
@@ -698,30 +739,39 @@ elif st.session_state.page_view == "REMEDIATION_RESULTS":
             st.code("\n".join(res["logs"]), language="bash")
 
         st.markdown("#### 📥 Compliance & Security Audit Downloads")
-        d1, d2, d3 = st.columns(3)
+        d1, d2, d3, d4 = st.columns(4)
         csv_rep = ComplianceReportGenerator.generate_csv_summary(res, selected_compliance)
         json_man = ComplianceReportGenerator.generate_json_manifest(res, selected_compliance)
         pdf_rep = ComplianceReportGenerator.generate_pdf_report(res, selected_compliance)
+        raw_hardened_json = json.dumps(res["hardened_payload"], indent=2)
 
         with d1:
             st.download_button(
-                "📄 Security Audit Summary (.CSV)",
+                "📦 Ingestible Workload (.JSON)",
+                data=raw_hardened_json,
+                file_name=f"Hardened_Workload_{res['hardened_payload'].get('ami_id')}.json",
+                mime="application/json",
+                use_container_width=True
+            )
+        with d2:
+            st.download_button(
+                "📄 Audit Summary (.CSV)",
                 data=csv_rep,
                 file_name=f"Audit_{res['hardened_payload'].get('ami_id')}.csv",
                 mime="text/csv",
                 use_container_width=True
             )
-        with d2:
+        with d3:
             st.download_button(
-                "📦 Full Compliance Manifest (.JSON)",
+                "📋 Audit Manifest (.JSON)",
                 data=json_man,
                 file_name=f"Manifest_{res['hardened_payload'].get('ami_id')}.json",
                 mime="application/json",
                 use_container_width=True
             )
-        with d3:
+        with d4:
             st.download_button(
-                "📑 Download Audit Report (.PDF)",
+                "📑 Download PDF Report",
                 data=pdf_rep,
                 file_name=f"CloudSentinel_Report_{res['hardened_payload'].get('ami_id')}.pdf",
                 mime="application/pdf",

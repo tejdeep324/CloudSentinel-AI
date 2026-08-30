@@ -1,5 +1,17 @@
 from typing import Dict, Any, List
 
+def unwrap_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Unwraps payload if it is nested inside an audit manifest or report wrapper."""
+    if not isinstance(payload, dict):
+        return {}
+    if "manifest" in payload and isinstance(payload["manifest"], dict) and "storage" in payload["manifest"]:
+        return payload["manifest"]
+    if "hardened_payload" in payload and isinstance(payload["hardened_payload"], dict) and "storage" in payload["hardened_payload"]:
+        return payload["hardened_payload"]
+    if "workload" in payload and isinstance(payload["workload"], dict) and "storage" in payload["workload"]:
+        return payload["workload"]
+    return payload
+
 def calculate_risk_score(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Evaluates cloud workload telemetry across 4 security domains (Max: 100 points).
@@ -8,6 +20,7 @@ def calculate_risk_score(payload: Dict[str, Any]) -> Dict[str, Any]:
     - IAM Least Privilege: 25 pts
     - OS CIS Baseline: 20 pts
     """
+    payload = unwrap_payload(payload)
     breakdown = {}
     deductions: List[str] = []
 
