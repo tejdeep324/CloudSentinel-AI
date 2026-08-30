@@ -1,17 +1,26 @@
-# 🛡️ CloudSentinel AI
-### Autonomous Workload Security & Zero-Trust AMI Hardening Platform
+# 🛡️ CloudSentinel AI — Autonomous Multi-Agent Migration Security & AMI Hardening
 
-CloudSentinel AI is an autonomous cloud governance framework designed to secure server migration pipelines before deployment into production cloud environments.
+CloudSentinel AI is an autonomous governance interceptor for cloud workload migrations into AWS. It intercepts unhardened virtual machines in an isolated quarantine subnet, orchestrates specialized domain AI agents (Storage, Network, IAM, Compliance, CVE Hunter), executes Zero-Trust hardening, and bakes verified **Golden AMIs** ($Score \ge 90/100$) before releasing them to production VPCs.
 
-## 📌 Architecture Highlights
-- **Pre-Deployment Interception:** Quarantines inbound migration images inside an isolated AWS VPC subnet.
-- **Multi-Agent Collaborative AI:** Specialized sub-agents (IAM, Network, Security, Compliance) evaluate workloads and generate transparent risk reports.
-- **Autonomous Hardening Engine:** Builds CIS-compliant Golden AMIs with automated AWS KMS encryption and security group lockdowns.
-- **Closed-Loop Verification & Rollback:** Automatically re-scans the hardened artifact and triggers snapshot rollbacks if compliance thresholds (<90/100) are not met.
-- **Cost & Compliance Governance:** Features live PCI-DSS, HIPAA, and SOC2 compliance validation alongside automated EC2 instance right-sizing.
+---
 
-## 🚀 Quickstart
+## 🏗️ 10-Service AWS Architecture
 
-1. **Install Dependencies:**
-   ```bash
-   pip install -r requirements.txt
+```text
+[Quarantined EC2 Workload]
+           │
+           ▼
+[Multi-Agent Blackboard (SupervisorAgent + Sub-Agents)]
+   ├── SecurityAgent ──────► AWS KMS (AES-256 CMK)
+   ├── NetworkAgent  ──────► AWS VPC & Security Groups (Private CIDRs)
+   ├── IAMAgent      ──────► AWS IAM (Scoped Roles / Least Privilege)
+   └── CVE & OS Agent ────► CIS Level 1 OS Hardening Scripts
+           │
+           ▼
+[Automated Golden AMI Bake (EC2 CreateImage)]
+           │
+           ├─► Amazon S3 (Audit Vault Manifests)
+           ├─► Amazon DynamoDB (Migration State Log)
+           ├─► AWS WAF (Web Application Firewall ACL)
+           ├─► Amazon CloudWatch (Metric Alarms)
+           └─► AWS Config (Continuous Compliance Checks)

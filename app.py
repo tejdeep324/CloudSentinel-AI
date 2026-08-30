@@ -22,6 +22,8 @@ from core.iac_generator import IaCGenerator
 from core.ansible_generator import AnsiblePlaybookGenerator
 from core.recovery_manager import RecoverySnapshotManager
 from core.aws_live_service import AWSLiveService
+from core.orchestration_service import AWSOrchestrationService
+from core.packer_generator import PackerImageBuilderGenerator
 from tools.cost_calculator_tool import FinOpsCostCalculatorTool
 from tools.cve_scanner_tool import CVEScannerTool
 
@@ -162,13 +164,13 @@ if st.session_state.page_view == "STAGE_INGESTION":
 
     st.markdown("## 🛡️ Autonomous Migration Security Control Plane")
     
-    with st.expander("ℹ️ **About CloudSentinel AI & AWS Architecture**", expanded=False):
+    with st.expander("ℹ️ **About CloudSentinel AI & Full AWS Stack Architecture**", expanded=False):
         st.markdown("""
-        **CloudSentinel AI** integrates natively with **AWS Services**:
-        * **AWS EC2:** Programmatically intercepts quarantine VMs and bakes verified Golden AMIs.
-        * **AWS KMS:** Creates and binds Customer-Managed Keys (CMK) with AES-256 encryption.
-        * **AWS Security Groups / VPC:** Automatically replaces open `0.0.0.0/0` ingress rules with private CIDR masks.
-        * **AWS IAM:** Detects wildcard administrator roles and enforces least-privilege instance profiles.
+        **CloudSentinel AI** covers the complete ecosystem from the specification:
+        * **Infrastructure:** Amazon EC2, Golden AMI, AWS VPC, AWS IAM, Amazon S3, DynamoDB, AWS KMS, AWS WAF, Amazon CloudWatch, AWS Config.
+        * **Orchestration & Integration:** AWS Step Functions, Amazon SQS, Amazon SNS, AWS Database Migration Service (DMS).
+        * **AMI Building Tools:** HashiCorp Packer (`.pkr.hcl`) & AWS EC2 Image Builder Recipes.
+        * **Multi-Agent Framework:** Supervisor & Sub-Agents with Gemini 2.5 Flash / local fallback tools.
         """)
 
     st.markdown("""
@@ -284,17 +286,17 @@ if st.session_state.page_view == "STAGE_INGESTION":
             <div class="agent-card">
                 <h4 style="color:#0284c7; margin:0 0 6px 0;">🧠 SupervisorAgent (Orchestration & Consensus)</h4>
                 <b>Target Problem:</b> Multi-domain conflict resolution and trade-off planning.<br>
-                <b>AWS Integration:</b> Dispatches domain agents, evaluates overall risk posture, and generates Golden AMI baking strategies.
+                <b>AWS Stack:</b> Coordinates Step Functions, dispatches SQS queues, and structures AMI baking.
             </div>
             <div class="agent-card">
                 <h4 style="color:#dc2626; margin:0 0 6px 0;">🔒 SecurityAgent (Storage & OS Hardening)</h4>
                 <b>Target Problem:</b> Plaintext disk storage and insecure OS configurations.<br>
-                <b>AWS Integration:</b> Inspects EBS volumes for <b>AWS KMS CMK</b> encryption and applies CIS Level 1 baselines.
+                <b>AWS Stack:</b> Interacts with <b>AWS KMS</b> for CMK encryption and Packer recipes.
             </div>
             <div class="agent-card">
                 <h4 style="color:#ea580c; margin:0 0 6px 0;">🌐 NetworkAgent (Perimeter & Ingress)</h4>
                 <b>Target Problem:</b> Public internet exposure of sensitive management & DB ports.<br>
-                <b>AWS Integration:</b> Analyzes <b>AWS VPC Security Groups</b>, revoking <code>0.0.0.0/0</code> public access on ports 22/3389/3306.
+                <b>AWS Stack:</b> Secures <b>AWS VPC Security Groups</b> and configures <b>AWS WAF</b> rulesets.
             </div>
             """, unsafe_allow_html=True)
             
@@ -303,17 +305,17 @@ if st.session_state.page_view == "STAGE_INGESTION":
             <div class="agent-card">
                 <h4 style="color:#7c3aed; margin:0 0 6px 0;">🔑 IAMAgent (Access Governance & Least Privilege)</h4>
                 <b>Target Problem:</b> Over-privileged wildcard administrator roles on compute instances.<br>
-                <b>AWS Integration:</b> Inspects <b>AWS IAM Instance Profiles</b>, revoking <code>AdministratorAccess</code> and attaching scoped roles.
+                <b>AWS Stack:</b> Evaluates <b>AWS IAM</b> instance profiles and enforces Least Privilege.
             </div>
             <div class="agent-card">
                 <h4 style="color:#16a34a; margin:0 0 6px 0;">📋 ComplianceAgent (Regulatory Framework Mapping)</h4>
                 <b>Target Problem:</b> Regulatory compliance failure under standard cloud frameworks.<br>
-                <b>AWS Integration:</b> Maps AWS configuration violations directly to <b>PCI-DSS v4.0</b>, <b>HIPAA</b>, and <b>SOC 2</b>.
+                <b>AWS Stack:</b> Maps violations directly to <b>AWS Config Rules</b>, PCI-DSS, HIPAA, and SOC 2.
             </div>
             <div class="agent-card">
                 <h4 style="color:#0f766e; margin:0 0 6px 0;">🔍 CVEScannerTool (Package Vulnerability Hunter)</h4>
                 <b>Target Problem:</b> Unpatched OS vulnerabilities and known software exploits.<br>
-                <b>AWS Integration:</b> Scans Linux packages on AWS EC2 instances against NVD vulnerability databases.
+                <b>AWS Stack:</b> Correlates CVEs and triggers Packer provisioning patches.
             </div>
             """, unsafe_allow_html=True)
 
@@ -441,15 +443,23 @@ elif st.session_state.page_view == "MULTI_AGENT_AUDIT":
         st.caption(f"⚡ **Details:** {plan_obj.description}")
 
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔧 Execute Hardening & Build Golden AMI (AWS SDK)", type="primary", use_container_width=True):
-            with st.spinner("Invoking AWS KMS, modifying Security Groups, and baking Golden AMI via AWS SDK..."):
+        if st.button("🔧 Execute Hardening & Build Golden AMI", type="primary", use_container_width=True):
+            with st.spinner("Invoking AWS KMS, SQS queues, and baking Golden AMI..."):
                 res = orchestrator.run_full_pipeline(payload, selected_plan, force_failure=simulate_fail)
                 res["selected_plan_name"] = selected_plan
                 
-                # Run live AWS hardening hooks
+                # AWS Live Service + SNS Integration
                 aws_exec_res = aws_service.execute_live_hardening(payload, selected_plan)
                 res["logs"].extend(aws_exec_res["logs"])
                 
+                sns_res = AWSOrchestrationService.publish_sns_security_alert(
+                    "arn:aws:sns:us-east-1:123456789012:CloudSentinelMigrationApprovals",
+                    payload.get("instance_id", "i-workload-node"),
+                    res["deployment_status"],
+                    res["post_score"]
+                )
+                res["logs"].append(f"[Amazon SNS] Published security event notification: {sns_res['message_id']}")
+
                 st.session_state.pipeline_result = res
                 
                 db_service.record_migration_event(
@@ -493,12 +503,13 @@ elif st.session_state.page_view == "REMEDIATION_RESULTS":
             st.session_state.pipeline_result = None
             st.rerun()
 
-    tab_res1, tab_res2, tab_res3, tab_res4, tab_res5 = st.tabs([
-        "🛡️ Verification Posture & Delta",
-        "🏗️ Terraform IaC Artifacts",
-        "📜 Ansible Hardening Playbook",
+    tab_res1, tab_res2, tab_res3, tab_res4, tab_res5, tab_res6 = st.tabs([
+        "🛡️ Posture Verification",
+        "🏗️ Terraform IaC (10 AWS Services)",
+        "📦 HashiCorp Packer & Image Builder",
+        "⚙️ Step Functions & DMS",
         "📋 Regulatory Compliance & FinOps",
-        "🗄️ Historical Audit Logs"
+        "🗄️ Audit Logs"
     ])
 
     with tab_res1:
@@ -588,31 +599,29 @@ elif st.session_state.page_view == "REMEDIATION_RESULTS":
             )
 
     with tab_res2:
-        st.markdown("### 🏗️ Auto-Generated Infrastructure as Code (Terraform)")
+        st.markdown("### 🏗️ Auto-Generated Terraform IaC (10 AWS Services)")
         tf_code = IaCGenerator.generate_terraform(res["hardened_payload"], selected_compliance)
         st.code(tf_code, language="hcl")
-        st.download_button(
-            "📥 Download main.tf",
-            data=tf_code,
-            file_name="main.tf",
-            mime="text/plain",
-            type="primary"
-        )
+        st.download_button("📥 Download main.tf", data=tf_code, file_name="main.tf", mime="text/plain", type="primary")
 
     with tab_res3:
-        st.markdown("### 📜 Auto-Generated Ansible Hardening Playbook")
-        st.caption("Apply CIS Level 1 OS baselines and network firewall rules directly to running Linux instances:")
-        ansible_code = AnsiblePlaybookGenerator.generate_playbook(res["hardened_payload"], selected_compliance)
-        st.code(ansible_code, language="yaml")
-        st.download_button(
-            "📥 Download hardening_playbook.yml",
-            data=ansible_code,
-            file_name="hardening_playbook.yml",
-            mime="text/yaml",
-            type="primary"
-        )
+        st.markdown("### 📦 HashiCorp Packer & AWS EC2 Image Builder Recipes")
+        packer_code = PackerImageBuilderGenerator.generate_packer_hcl(res["hardened_payload"], selected_compliance)
+        st.code(packer_code, language="hcl")
+        st.download_button("📥 Download packer.pkr.hcl", data=packer_code, file_name="packer.pkr.hcl", mime="text/plain", type="primary")
 
     with tab_res4:
+        st.markdown("### ⚙️ AWS Step Functions ASL & AWS DMS Configuration")
+        sfn_code = AWSOrchestrationService.generate_step_functions_asl()
+        dms_code = AWSOrchestrationService.generate_dms_migration_task()
+        
+        st.markdown("#### 🔄 AWS Step Functions State Machine (ASL JSON)")
+        st.code(sfn_code, language="json")
+        
+        st.markdown("#### 🗄️ AWS Database Migration Service (DMS) Task Definition")
+        st.code(dms_code, language="json")
+
+    with tab_res5:
         st.markdown(f"### 📋 Regulatory Compliance Analysis: **{selected_compliance}**")
         comp_res = evaluate_compliance(payload, selected_compliance)
         
@@ -643,7 +652,7 @@ elif st.session_state.page_view == "REMEDIATION_RESULTS":
         with st.expander("🛠️ View Point-in-Time Disaster Recovery Runbook (.sh)", expanded=False):
             st.code(dr_info["rollback_script"], language="bash")
 
-    with tab_res5:
+    with tab_res6:
         st.markdown("### 🗄️ Immutable Migration Audit Log (SQLite)")
         history = db_service.get_historical_logs()
         if len(history) > 0:
